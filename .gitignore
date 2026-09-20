@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+*$py.class
+room_messages.db
+.env
+.DS_Store
