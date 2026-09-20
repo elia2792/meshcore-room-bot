@@ -429,6 +429,10 @@ def build_send_self_advert_frame(flood: bool = True) -> bytes:
     payload = bytes([7, adv_type])
     return b"<" + struct.pack("<H", len(payload)) + payload
 
+def build_get_contacts_frame(since_ts: int = 0) -> bytes:
+    payload = bytes([4]) + struct.pack("<I", int(since_ts))
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
 def build_reboot_frame() -> bytes:
     payload = bytes([19]) + b"reboot"
     return b"<" + struct.pack("<H", len(payload)) + payload
@@ -743,10 +747,25 @@ async def websocket_client_endpoint(websocket: WebSocket):
                         await broadcast_telegram(f"📻 <b>Canale [{ch_idx}] configurato:</b> <b>{ch_name}</b>")
                     await websocket.send_json({"type": "action_result", "action": "set_channel", "success": sent, "channel_idx": ch_idx})
             elif action == "send_self_advert":
-                frame = build_send_self_advert_frame(flood=True)
+                flood = bool(data.get("flood", True))
+                frame = build_send_self_advert_frame(flood=flood)
                 sent = await send_to_heltec(frame)
-                await broadcast_telegram(f"📢 <b>Beacon Advert trasmesso via radio in flood!</b>")
+                await broadcast_telegram(f"📢 <b>Beacon Advert trasmesso via radio in {'flood' if flood else 'zero-hop'}!</b>")
                 await websocket.send_json({"type": "action_result", "action": "send_self_advert", "success": sent})
+            elif action == "find_nearby_nodes":
+                # Send zero-hop advert to make nearby nodes reply, then query contacts table
+                frame_adv = build_send_self_advert_frame(flood=False)
+                sent_adv = await send_to_heltec(frame_adv)
+                await asyncio.sleep(0.1)
+                frame_contacts = build_get_contacts_frame(0)
+                sent_contacts = await send_to_heltec(frame_contacts)
+                await broadcast_telegram("🔍 <b>Scansione nodi vicini avviata (Advert zero-hop + sync contatti)</b>")
+                await websocket.send_json({
+                    "type": "action_result",
+                    "action": "find_nearby_nodes",
+                    "success": sent_adv or sent_contacts,
+                    "nodes": get_recent_heard_nodes(50)
+                })
             elif action == "reboot":
                 frame = build_reboot_frame()
                 sent = await send_to_heltec(frame)
@@ -896,6 +915,15 @@ async def api_advert_send():
     if sent:
         await broadcast_telegram("📢 <b>Beacon Advert inviato via radio in flood da Web!</b>")
     return {"success": sent}
+
+@app.post("/api/nodes/scan")
+async def api_nodes_scan():
+    frame_adv = build_send_self_advert_frame(flood=False)
+    sent_adv = await send_to_heltec(frame_adv)
+    await asyncio.sleep(0.1)
+    frame_contacts = build_get_contacts_frame(0)
+    sent_contacts = await send_to_heltec(frame_contacts)
+    return {"success": sent_adv or sent_contacts, "nodes": get_recent_heard_nodes(50)}
 
 @app.websocket("/ws/mesh")
 async def websocket_mesh_endpoint(websocket: WebSocket):
@@ -1082,6 +1110,24 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                             })
                     except Exception as e:
                         print("Error parsing advert frame:", e)
+
+                # RESP_CODE_CONTACT_INFO = 15 (0x0F)
+                elif code == 15 and len(payload) >= 50:
+                    try:
+                        out_path_len = payload[35] if len(payload) > 35 else 0
+                        contact_name = payload[44:76].split(b"\x00")[0].decode("utf-8", errors="ignore").strip()
+                        gps_lat_raw = struct.unpack("<i", payload[80:84])[0] if len(payload) >= 84 else 0
+                        gps_lon_raw = struct.unpack("<i", payload[84:88])[0] if len(payload) >= 88 else 0
+                        c_lat = (gps_lat_raw / 1000000.0) if gps_lat_raw != 0 else None
+                        c_lon = (gps_lon_raw / 1000000.0) if gps_lon_raw != 0 else None
+                        if contact_name:
+                            record_heard_node(contact_name, None, out_path_len, "Mesh Contact", c_lat, c_lon)
+                            await broadcast_to_browsers({
+                                "type": "nodes",
+                                "nodes": get_recent_heard_nodes(30)
+                            })
+                    except Exception as e:
+                        print("Error parsing contact info frame:", e)
 
                 # RESP_CODE_CONTACT_MSG_RECV_V3 = 16 or RESP_CODE_CONTACT_MSG_RECV = 7
                 elif code in (16, 7):
