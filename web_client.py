@@ -715,6 +715,7 @@ def get_web_client_html() -> str:
         let messages = [];
         let heardNodes = [];
         let soundEnabled = true;
+        let isHeltecConnected = false;
 
         // Restore callsign and sound preferences
         const savedCallsign = localStorage.getItem("meshcore_callsign");
@@ -913,6 +914,13 @@ def get_web_client_html() -> str:
                 if (m.lat && m.lon) {
                     metricsParts.push(`<a href="https://www.openstreetmap.org/?mlat=${m.lat}&mlon=${m.lon}#map=14/${m.lat}/${m.lon}" target="_blank" class="map-btn">📍 Mappa (${m.lat.toFixed(4)}, ${m.lon.toFixed(4)})</a>`);
                 }
+                if (m.sent_to_radio !== undefined && m.sent_to_radio !== null) {
+                    if (m.sent_to_radio === true) {
+                        metricsParts.push(`<span class="signal-pill good" title="Confermato: Trasmesso via radio LoRa dall'antenna">✓✓ Trasmesso via LoRa</span>`);
+                    } else {
+                        metricsParts.push(`<span class="signal-pill poor" title="Heltec offline: salvato solo nella room">⚠️ Non irradiato (Heltec offline)</span>`);
+                    }
+                }
 
                 if (metricsParts.length > 0) {
                     footerHtml = `<div class="msg-footer">${metricsParts.join(" &nbsp;•&nbsp; ")}</div>`;
@@ -973,6 +981,10 @@ def get_web_client_html() -> str:
         function updateStationInfo(info, stats, heltecConnected) {
             const badge = document.getElementById("boardStatusBadge");
             const text = document.getElementById("boardStatusText");
+
+            if (heltecConnected !== undefined && heltecConnected !== null) {
+                isHeltecConnected = !!heltecConnected;
+            }
 
             if (heltecConnected) {
                 badge.className = "badge-status online";
@@ -1065,6 +1077,39 @@ def get_web_client_html() -> str:
             }
         }
 
+        function showToast(msg, isSuccess) {
+            let toast = document.getElementById("toastNotification");
+            if (!toast) {
+                toast = document.createElement("div");
+                toast.id = "toastNotification";
+                toast.style.position = "fixed";
+                toast.style.bottom = "84px";
+                toast.style.left = "50%";
+                toast.style.transform = "translateX(-50%)";
+                toast.style.padding = "10px 18px";
+                toast.style.borderRadius = "10px";
+                toast.style.fontSize = "0.86rem";
+                toast.style.fontWeight = "600";
+                toast.style.zIndex = "999";
+                toast.style.transition = "all 0.25s ease";
+                toast.style.boxShadow = "0 6px 18px rgba(0,0,0,0.5)";
+                toast.style.maxWidth = "90%";
+                toast.style.textAlign = "center";
+                document.body.appendChild(toast);
+            }
+            toast.style.background = isSuccess ? "#059669" : "#d97706";
+            toast.style.color = "#ffffff";
+            toast.innerText = msg;
+            toast.style.opacity = "1";
+            toast.style.pointerEvents = "auto";
+            setTimeout(() => { 
+                if (toast) {
+                    toast.style.opacity = "0"; 
+                    toast.style.pointerEvents = "none";
+                }
+            }, 3800);
+        }
+
         // Send Message
         async function sendMessage() {
             const input = document.getElementById("messageInput");
@@ -1113,8 +1158,13 @@ def get_web_client_html() -> str:
             if (sentSuccess) {
                 input.value = "";
                 input.focus();
+                if (isHeltecConnected) {
+                    showToast("📡 Inviato! La Heltec sta trasmettendo il pacchetto via LoRa.", true);
+                } else {
+                    showToast("💾 Salvato nel server. (Heltec offline, non irradiato via radio).", false);
+                }
             } else {
-                alert("Errore invio: Impossibile contattare il server MeshCore.");
+                showToast("❌ Errore invio: Impossibile contattare il server MeshCore.", false);
             }
         }
 
