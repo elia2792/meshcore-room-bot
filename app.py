@@ -54,8 +54,51 @@ def init_db():
             content TEXT
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            chat_id TEXT PRIMARY KEY,
+            chat_type TEXT,
+            chat_title TEXT,
+            active_channel INTEGER DEFAULT 0,
+            last_active DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
+
+def register_subscription(chat_id: str, chat_type: str = "private", chat_title: str = "Chat"):
+    if not chat_id:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO subscriptions (chat_id, chat_type, chat_title, last_active)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                chat_type = excluded.chat_type,
+                chat_title = excluded.chat_title,
+                last_active = CURRENT_TIMESTAMP
+        ''', (chat_id, chat_type, chat_title))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("DB register_subscription error:", e)
+
+def get_all_subscriptions() -> List[str]:
+    recipients = set()
+    if TELEGRAM_CHAT_ID:
+        recipients.add(str(TELEGRAM_CHAT_ID))
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT chat_id FROM subscriptions")
+        for row in cursor.fetchall():
+            recipients.add(str(row[0]))
+        conn.close()
+    except Exception as e:
+        print("DB get_all_subscriptions error:", e)
+    return list(recipients)
 
 def save_message(source: str, sender: str, channel: str, content: str):
     try:
@@ -103,16 +146,11 @@ async def send_telegram(text: str, chat_id: str = TELEGRAM_CHAT_ID, reply_markup
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(url, json=payload)
     except Exception as e:
-        print("Telegram send error:", e)
+        print(f"Telegram send error to {chat_id}:", e)
 
 async def broadcast_telegram(text: str, reply_markup: Optional[dict] = None):
-    recipient_chats = set()
-    if TELEGRAM_CHAT_ID:
-        recipient_chats.add(TELEGRAM_CHAT_ID)
-    for cid in chat_active_channel.keys():
-        recipient_chats.add(cid)
-    
-    for cid in recipient_chats:
+    recipients = get_all_subscriptions()
+    for cid in recipients:
         await send_telegram(text, chat_id=cid, reply_markup=reply_markup)
 
 async def send_to_heltec(raw_bytes: bytes) -> bool:
@@ -424,8 +462,15 @@ async def telegram_polling_loop():
                         continue
 
                     text = msg.get("text", "")
-                    sender_name = msg.get("from", {}).get("first_name", "Utente")
-                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    sender_obj = msg.get("from") or {}
+                    chat_obj = msg.get("chat") or {}
+                    chat_id = str(chat_obj.get("id", ""))
+                    chat_type = chat_obj.get("type", "private") # "private", "group", "supergroup", "channel"
+                    chat_title = chat_obj.get("title") or sender_obj.get("first_name") or "Canale"
+                    sender_name = sender_obj.get("first_name") or msg.get("author_signature") or chat_title
+
+                    if chat_id:
+                        register_subscription(chat_id, chat_type, chat_title)
 
                     if not text:
                         continue
