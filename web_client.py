@@ -816,6 +816,167 @@ def get_web_client_html() -> str:
             from { opacity: 0; transform: translateY(12px); }
             to { opacity: 1; transform: translateY(0); }
         }
+
+        /* Modal Dialog for Scan Results */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(4, 7, 13, 0.78);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease;
+            padding: 16px;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .modal-dialog {
+            background: var(--surface);
+            border: 1px solid var(--border-highlight);
+            border-radius: 16px;
+            width: 100%;
+            max-width: 540px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7), 0 0 24px rgba(16, 185, 129, 0.15);
+            transform: scale(0.94);
+            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            overflow: hidden;
+        }
+
+        .modal-overlay.active .modal-dialog {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--surface-card);
+        }
+
+        .modal-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-main);
+        }
+
+        .modal-close-btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: none;
+            color: var(--text-muted);
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            font-size: 1.1rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+        }
+
+        .modal-close-btn:hover {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
+
+        .modal-body {
+            padding: 16px 20px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .scan-node-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: border-color 0.15s ease;
+        }
+
+        .scan-node-card:hover {
+            border-color: var(--primary);
+        }
+
+        .scan-node-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .scan-node-name {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .scan-telemetry-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 6px 10px;
+            font-size: 0.77rem;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .telemetry-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .telemetry-label {
+            color: var(--text-dim);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .telemetry-val {
+            color: var(--text-main);
+            font-weight: 600;
+            margin-top: 1px;
+        }
+
+        .modal-footer {
+            padding: 12px 20px;
+            border-top: 1px solid var(--border);
+            background: var(--surface-card);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
     </style>
 </head>
 <body>
@@ -1099,6 +1260,26 @@ def get_web_client_html() -> str:
     <!-- Toast Notifications -->
     <div id="toastContainer" class="toast-container"></div>
 
+    <!-- Modal Popup for Scan Results (Rich Telemetry & Distance) -->
+    <div id="scanModalOverlay" class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span>📡</span>
+                    <span>Nodi Rilevati dalla Scansione</span>
+                </div>
+                <button id="closeScanModalBtn" class="modal-close-btn" title="Chiudi popup">✕</button>
+            </div>
+            <div id="scanModalBody" class="modal-body">
+                <!-- Dynamically populated with telemetry cards -->
+            </div>
+            <div class="modal-footer">
+                <span id="scanModalSummary">Scansione completata.</span>
+                <button id="closeScanModalFooterBtn" class="btn-action btn-secondary" style="padding: 6px 14px; font-size: 0.8rem;">Chiudi</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // State
         let activeTab = "tabMessages";
@@ -1293,6 +1474,121 @@ def get_web_client_html() -> str:
                     leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
                 } catch(e) {}
             }
+        }
+
+        // Haversine Distance Calculation between two GPS coordinates in Kilometers
+        function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+            if (lat1 === null || lon1 === null || lat2 === null || lon2 === null) return null;
+            const R = 6371; // Radius of earth in km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // Show Scan Results Modal Dialog
+        function showScanResultsModal(nodesList) {
+            const overlay = document.getElementById("scanModalOverlay");
+            const body = document.getElementById("scanModalBody");
+            const summary = document.getElementById("scanModalSummary");
+            if (!overlay || !body) return;
+
+            body.innerHTML = "";
+            const list = (nodesList && nodesList.length > 0) ? nodesList : heardNodes;
+
+            if (!list || list.length === 0) {
+                body.innerHTML = `
+                    <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
+                        <div style="font-size: 2.2rem; margin-bottom: 8px;">📡</div>
+                        <b>Nessun nodo rilevato nelle immediate vicinanze.</b>
+                        <div style="font-size: 0.8rem; margin-top: 6px; color: var(--text-dim);">
+                            I beacon radio zero-hop sono stati inviati. Assicurati che altri nodi LoRa siano accesi sullo stesso canale e frequenza (${nodeInfo.freq_mhz || 869.618} MHz).
+                        </div>
+                    </div>
+                `;
+                summary.textContent = "Scansione terminata (0 nodi).";
+                overlay.classList.add("active");
+                return;
+            }
+
+            const myLat = (nodeInfo && nodeInfo.lat) ? Number(nodeInfo.lat) : null;
+            const myLon = (nodeInfo && nodeInfo.lon) ? Number(nodeInfo.lon) : null;
+
+            list.forEach(n => {
+                const card = document.createElement("div");
+                card.className = "scan-node-card";
+
+                const nLat = (n.lat !== null && n.lat !== undefined) ? Number(n.lat) : null;
+                const nLon = (n.lon !== null && n.lon !== undefined) ? Number(n.lon) : null;
+
+                // Compute distance
+                let distStr = "Non disp. (senza GPS)";
+                let distNum = null;
+                if (myLat && myLon && nLat && nLon) {
+                    const d = calculateDistanceKm(myLat, myLon, nLat, nLon);
+                    if (d !== null) {
+                        distNum = d;
+                        distStr = d < 1 ? `${Math.round(d * 1000)} metri` : `${d.toFixed(2)} km`;
+                    }
+                } else if (!myLat || !myLon) {
+                    distStr = "Imposta GPS stazione per calcolare";
+                }
+
+                const snrVal = (n.last_snr !== null && n.last_snr !== undefined) ? `${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)} dB` : "N/A";
+                const hopsVal = (n.last_hops !== undefined && n.last_hops !== null) ? (n.last_hops === 0 ? "0 (Diretto RF)" : `${n.last_hops} hop`) : "Diretto";
+                const packetsVal = n.packets_count || 1;
+                const lastSeenVal = n.last_seen ? n.last_seen : "Adesso";
+                const channelVal = n.last_channel || "Radio LoRa";
+
+                card.innerHTML = `
+                    <div class="scan-node-top">
+                        <div class="scan-node-name">
+                            <span>📻</span>
+                            <span>${escapeHtml(n.node_name)}</span>
+                        </div>
+                        <span class="node-badge" style="font-size:0.75rem;">${escapeHtml(channelVal)}</span>
+                    </div>
+                    <div class="scan-telemetry-grid">
+                        <div class="telemetry-item">
+                            <span class="telemetry-label">📏 Distanza</span>
+                            <span class="telemetry-val" style="color:${distNum ? '#10b981' : 'var(--text-muted)'};">${distStr}</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="telemetry-label">📶 Segnale SNR</span>
+                            <span class="telemetry-val">${snrVal}</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="telemetry-label">🔀 Salti / Hops</span>
+                            <span class="telemetry-val">${hopsVal}</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="telemetry-label">📦 Pacchetti RX</span>
+                            <span class="telemetry-val">${packetsVal}</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="telemetry-label">📍 Coordinate GPS</span>
+                            <span class="telemetry-val">${nLat && nLon ? `${nLat.toFixed(4)}, ${nLon.toFixed(4)}` : 'Non fornite'}</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="telemetry-label">⏱️ Ultimo Segnale</span>
+                            <span class="telemetry-val">${escapeHtml(lastSeenVal)}</span>
+                        </div>
+                    </div>
+                `;
+                body.appendChild(card);
+            });
+
+            summary.textContent = `Trovati ${list.length} nodi con telemetria.`;
+            overlay.classList.add("active");
+        }
+
+        function closeScanResultsModal() {
+            const overlay = document.getElementById("scanModalOverlay");
+            if (overlay) overlay.classList.remove("active");
         }
 
         // Audio Toggle
@@ -1598,7 +1894,8 @@ def get_web_client_html() -> str:
                         renderNodes();
                         renderMapMarkers();
                     }
-                    showToast("Scansione nodi completata! Tabella nodi e mappa aggiornate.", true);
+                    showToast("Scansione nodi completata!", true);
+                    showScanResultsModal(heardNodes);
                 } else if (data.success) {
                     showToast(`Operazione '${data.action}' completata con successo!`, true);
                 } else {
@@ -1791,7 +2088,17 @@ def get_web_client_html() -> str:
                             renderMapMarkers();
                         }
                         showToast("Scansione completata!", true);
+                        showScanResultsModal(heardNodes);
                     });
+            }
+        });
+
+        // Scan Modal Close Listeners
+        document.getElementById("closeScanModalBtn").addEventListener("click", closeScanResultsModal);
+        document.getElementById("closeScanModalFooterBtn").addEventListener("click", closeScanResultsModal);
+        document.getElementById("scanModalOverlay").addEventListener("click", (e) => {
+            if (e.target === document.getElementById("scanModalOverlay")) {
+                closeScanResultsModal();
             }
         });
 
