@@ -1162,7 +1162,8 @@ async def telegram_polling_loop():
                                     "content": content,
                                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                     "snr": None,
-                                    "hops": 0
+                                    "hops": 0,
+                                    "sent_to_radio": sent
                                 })
                                 if sent:
                                     await send_telegram(f"📡 <i>Trasmesso su [Canale {resolved}: {ch_name}] via LoRa:</i>\n\"{content}\"", chat_id=chat_id, message_thread_id=thread_id)
@@ -1217,7 +1218,8 @@ async def telegram_polling_loop():
                             "content": payload_text,
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "snr": None,
-                            "hops": 0
+                            "hops": 0,
+                            "sent_to_radio": sent
                         })
                         if sent:
                             await send_telegram(f"📡 <i>Trasmesso su [Canale {target_ch_idx}: {target_ch_name}] via LoRa:</i>\n\"{payload_text}\"", chat_id=chat_id, message_thread_id=thread_id)
