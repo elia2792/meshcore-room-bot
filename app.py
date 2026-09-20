@@ -48,7 +48,14 @@ async def broadcast_to_browsers(payload: dict):
         active_browser_clients.discard(ws)
 
 # MeshCore Channels and Node Cache
-discovered_channels: Dict[int, str] = {0: "Public"}
+discovered_channels: Dict[int, str] = {
+    0: "Public",
+    1: "Piemonte",
+    2: "Italia",
+    3: "Lombardia",
+    4: "Veneto",
+    6: "#it-pi"
+}
 chat_active_channel: Dict[str, int] = {}  # chat_id -> channel_idx
 default_channel_idx: int = 0
 node_info: Dict[str, Any] = {

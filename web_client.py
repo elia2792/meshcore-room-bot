@@ -709,7 +709,7 @@ def get_web_client_html() -> str:
     <script>
         // State
         let socket = null;
-        let channels = {0: "Public"};
+        let channels = {0: "Public", 1: "Piemonte", 2: "Italia", 3: "Lombardia", 4: "Veneto", 6: "#it-pi"};
         let currentFilter = "all";
         let activeSendChannel = 0;
         let messages = [];
@@ -1169,6 +1169,7 @@ def get_web_client_html() -> str:
         }, 25000);
 
         // Start
+        renderChannelsBar();
         connectWebSocket();
     </script>
 </body>
