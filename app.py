@@ -19,7 +19,7 @@ import httpx
 from web_client import get_web_client_html
 
 # Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8799543336:AAExe5g_-6ud-4kAX4p_EVtovS_R7KqSToM")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8799543336:AAGybJVWX6j_ZDW0bRfiKsDP0w8ojtfuJnE")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "365061699")
 DB_PATH = os.getenv("DB_PATH", "room_messages.db")
 
@@ -57,6 +57,7 @@ discovered_channels: Dict[int, str] = {
     6: "#it-pi"
 }
 chat_active_channel: Dict[str, int] = {}  # chat_id -> channel_idx
+chat_pending_input: Dict[str, str] = {}   # chat_id -> pending setting type (for state machine)
 default_channel_idx: int = 0
 node_info: Dict[str, Any] = {
     "name": "Buscate",
@@ -483,6 +484,122 @@ def build_channels_keyboard(current_idx: int) -> dict:
         {"text": "👥 Nodi Ascoltati", "callback_data": "heard_nodes"}
     ])
     return {"inline_keyboard": buttons}
+
+import math
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calcola la distanza in km tra due coordinate GPS (formula Haversine)."""
+    R = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+def build_main_menu_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📻 Canali", "callback_data": "menu_channels"},
+                {"text": "👥 Nodi Ascoltati", "callback_data": "menu_heard"}
+            ],
+            [
+                {"text": "🔍 Scan Nodi Vicini", "callback_data": "scan_nodes"},
+                {"text": "📋 Report Stazione", "callback_data": "menu_report"}
+            ],
+            [
+                {"text": "📊 Stato Live", "callback_data": "menu_status"},
+                {"text": "🗺️ Mappa Live", "url": "https://livemapnew.meshcoreitalia.it/"}
+            ],
+            [
+                {"text": "⚙️ Impostazioni", "callback_data": "menu_settings"},
+                {"text": "📜 Storico Room", "callback_data": "menu_history"}
+            ]
+        ]
+    }
+
+def build_settings_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📻 Radio (Freq/SF/BW/CR)", "callback_data": "set_radio"},
+                {"text": "⚡ TX Power", "callback_data": "set_tx_power"}
+            ],
+            [
+                {"text": "🏷️ Nome Nodo", "callback_data": "set_name"},
+                {"text": "📍 Posizione GPS", "callback_data": "set_gps"}
+            ],
+            [
+                {"text": "📢 Invia Beacon Advert", "callback_data": "send_beacon"},
+                {"text": "🕐 Sync Orario", "callback_data": "sync_time"}
+            ],
+            [
+                {"text": "🔁 Riavvia Heltec ⚠️", "callback_data": "reboot_confirm"},
+                {"text": "◀️ Menu Principale", "callback_data": "back_to_menu"}
+            ]
+        ]
+    }
+
+def build_reboot_confirm_keyboard() -> dict:
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Sì, riavvia ora", "callback_data": "reboot_yes"},
+                {"text": "❌ Annulla", "callback_data": "menu_settings"}
+            ]
+        ]
+    }
+
+def build_main_menu_text(chat_id: str) -> str:
+    status_str = "🟢 CONNESSA" if active_heltec_ws else "🔴 NON CONNESSA"
+    active_idx = chat_active_channel.get(chat_id, default_channel_idx)
+    active_name = discovered_channels.get(active_idx, f"Canale #{active_idx}")
+    freq = node_info.get("freq_mhz", 868.0)
+    name = node_info.get("name", "N/A")
+    return (
+        f"🔷 <b>MeshCore Control Panel</b>\n\n"
+        f"• Heltec V3: <b>{status_str}</b>\n"
+        f"• Nodo: <b>{name}</b> ({freq} MHz)\n"
+        f"• Canale TX attivo: <b>[{active_idx}] {active_name}</b>\n"
+        f"• Pacchetti RX: <b>{stats['packets_rx']}</b> | TX: <b>{stats['packets_tx']}</b>\n\n"
+        f"<i>Seleziona un'azione:</i>"
+    )
+
+def format_node_list_rich(nodes: list, my_lat: float = None, my_lon: float = None) -> str:
+    if not nodes:
+        return "ℹ️ Nessun nodo rilevato nelle ultime ore."
+    lines = [f"👥 <b>Nodi Radio Rilevati ({len(nodes)}):</b>\n"]
+    for n in nodes:
+        snr_str = f"{n['last_snr']:+.1f} dB" if n["last_snr"] is not None else "N/A"
+        h = n.get("last_hops", 0)
+        if h == 0 or h == 255:
+            hops_str = "Diretto RF"
+        else:
+            hops_str = f"{h} salto" if h == 1 else f"{h} salti"
+
+        dist_str = ""
+        n_lat = n.get("lat")
+        n_lon = n.get("lon")
+        if n_lat and n_lon and my_lat and my_lon:
+            dist = haversine_km(my_lat, my_lon, n_lat, n_lon)
+            dist_str = f"📏 {int(dist * 1000)} m" if dist < 1.0 else f"📏 {dist:.1f} km"
+
+        last_time = n.get("last_seen", "")
+        last_time_str = last_time[11:16] if last_time and len(last_time) >= 16 else "N/A"
+
+        block = (
+            f"━━━━━━━━━━━━━\n"
+            f"📟 <b>{n['node_name']}</b>\n"
+            f"  📶 SNR: <b>{snr_str}</b> | 🔀 <b>{hops_str}</b>\n"
+            f"  📦 Pkt RX: {n.get('packets_count', '?')} | 📻 {n['last_channel']}\n"
+            f"  ⏱️ Ultimo: {last_time_str}"
+        )
+        if dist_str:
+            block += f"\n  {dist_str}"
+        if n_lat and n_lon:
+            block += f"\n  📍 <a href='https://www.openstreetmap.org/?mlat={n_lat}&mlon={n_lon}#map=14/{n_lat}/{n_lon}'>GPS ({n_lat:.4f}, {n_lon:.4f})</a>"
+        lines.append(block)
+    return "\n".join(lines)
 
 async def generate_report_text() -> str:
     uptime_since = stats.get("connected_since", "N/A")
@@ -1212,55 +1329,261 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
     chat_id = str(cq.get("message", {}).get("chat", {}).get("id", ""))
     data = cq.get("data", "")
 
+    async def ack(text: str = ""):
+        try:
+            await client.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
+                json={"callback_query_id": cq_id, "text": text}
+            )
+        except Exception:
+            pass
+
+    # ── Selezione canale ────────────────────────────────────────────────────
     if data.startswith("ch:"):
         ch_idx = int(data.split(":")[1])
         chat_active_channel[chat_id] = ch_idx
         ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
-        await client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
-            json={"callback_query_id": cq_id, "text": f"Canale attivo impostato: [{ch_idx}] {ch_name}"}
-        )
+        await ack(f"✅ Canale [{ch_idx}] {ch_name}")
         await send_telegram(
             f"✅ <b>Canale selezionato: [{ch_idx}] {ch_name}</b>\n"
-            f"Tutti i messaggi successivi senza prefisso verranno trasmessi su questo canale.\n\n"
-            f"<i>Suggerimento: puoi anche scrivere a un canale specifico usando <code>#canale messaggio</code> o <code>/c {ch_idx} messaggio</code></i>.",
+            f"I tuoi messaggi verranno trasmessi su questo canale.\n\n"
+            f"<i>Usa <code>#canale testo</code> per scrivere su un canale al volo.</i>",
             chat_id=chat_id,
             reply_markup=build_channels_keyboard(ch_idx)
         )
+
+    # ── Aggiorna canali dalla Heltec ────────────────────────────────────────
     elif data == "refresh_channels":
-        await client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
-            json={"callback_query_id": cq_id, "text": "Aggiorno i canali dalla Heltec..."}
-        )
+        await ack("Aggiorno canali dalla Heltec...")
         if active_heltec_ws:
             await query_all_heltec_channels()
             await asyncio.sleep(1.0)
             active_idx = chat_active_channel.get(chat_id, default_channel_idx)
-            await send_telegram(
-                "🔄 <b>Canali aggiornati dalla Heltec!</b>",
-                chat_id=chat_id,
-                reply_markup=build_channels_keyboard(active_idx)
-            )
+            await send_telegram("🔄 <b>Canali aggiornati dalla Heltec!</b>", chat_id=chat_id, reply_markup=build_channels_keyboard(active_idx))
         else:
             await send_telegram("⚠️ Heltec non connessa al cloud in questo momento.", chat_id=chat_id)
-    elif data == "heard_nodes":
-        await client.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
-            json={"callback_query_id": cq_id}
+
+    # ── Menu principale ─────────────────────────────────────────────────────
+    elif data == "back_to_menu":
+        await ack()
+        await send_telegram(build_main_menu_text(chat_id), chat_id=chat_id, reply_markup=build_main_menu_keyboard())
+
+    # ── Canali (da menu) ────────────────────────────────────────────────────
+    elif data == "menu_channels":
+        await ack()
+        active_idx = chat_active_channel.get(chat_id, default_channel_idx)
+        ch_lines = [f"• <b>[{idx}] {name}</b> {'🟢 <b>(Attivo)</b>' if idx == active_idx else ''}" for idx, name in sorted(discovered_channels.items())]
+        await send_telegram(
+            f"📻 <b>Canali Heltec disponibili:</b>\n\n" + "\n".join(ch_lines) +
+            f"\n\n<i>Tocca un bottone per cambiare il canale TX attivo.</i>",
+            chat_id=chat_id,
+            reply_markup=build_channels_keyboard(active_idx)
         )
-        nodes = get_recent_heard_nodes(10)
-        if not nodes:
-            await send_telegram("ℹ️ Nessun nodo radio rilevato nelle ultime ore.", chat_id=chat_id)
+
+    # ── Nodi ascoltati (da menu) ────────────────────────────────────────────
+    elif data in ("menu_heard", "heard_nodes"):
+        await ack()
+        nodes = get_recent_heard_nodes(15)
+        my_lat = node_info.get("lat")
+        my_lon = node_info.get("lon")
+        await send_telegram(
+            format_node_list_rich(nodes, my_lat, my_lon),
+            chat_id=chat_id,
+            reply_markup=build_main_menu_keyboard()
+        )
+
+    # ── Report stazione ─────────────────────────────────────────────────────
+    elif data == "menu_report":
+        await ack()
+        rep = await generate_report_text()
+        await send_telegram(rep, chat_id=chat_id, reply_markup=build_main_menu_keyboard())
+
+    # ── Stato live ──────────────────────────────────────────────────────────
+    elif data == "menu_status":
+        await ack()
+        active_idx = chat_active_channel.get(chat_id, default_channel_idx)
+        active_name = discovered_channels.get(active_idx, f"Canale #{active_idx}")
+        status_str = "🟢 Connessa" if active_heltec_ws else "🔴 Non connessa"
+        ch_summary = ", ".join([f"[{k}] {v}" for k, v in sorted(discovered_channels.items())])
+        await send_telegram(
+            f"📊 <b>Stato MeshCore Bridge</b>\n"
+            f"• Heltec V3: {status_str}\n"
+            f"• Nome Nodo: <b>{node_info.get('name', 'N/A')}</b>\n"
+            f"• Frequenza: <b>{node_info.get('freq_mhz', 868.0)} MHz</b>\n"
+            f"• BW: <b>{node_info.get('bw_khz', 62.5)} kHz</b> | SF: <b>{node_info.get('sf', 8)}</b> | CR: <b>4/{node_info.get('cr', 8)}</b>\n"
+            f"• TX Power: <b>{node_info.get('tx_power', 20)} dBm</b>\n"
+            f"• Canale attivo: <b>[{active_idx}] {active_name}</b>\n"
+            f"• Canali noti: {ch_summary}\n"
+            f"• Pacchetti RX: {stats['packets_rx']} | TX: {stats['packets_tx']}\n"
+            f"• Ultimo contatto: {stats.get('last_seen', 'N/A')}",
+            chat_id=chat_id,
+            reply_markup=build_main_menu_keyboard()
+        )
+
+    # ── Storico messaggi ────────────────────────────────────────────────────
+    elif data == "menu_history":
+        await ack()
+        recent = get_recent_messages(12)
+        if not recent:
+            await send_telegram("📭 Nessun messaggio nella Room.", chat_id=chat_id, reply_markup=build_main_menu_keyboard())
         else:
-            lines = ["👥 <b>Nodi Radio Ascoltati di Recente:</b>\n"]
-            for n in nodes:
-                snr_info = f", SNR: {n['last_snr']:+.1f}dB" if n["last_snr"] is not None else ""
-                lines.append(f"• <b>{n['node_name']}</b> (Canale: {n['last_channel']}{snr_info}, {n['last_hops']} salti)")
-                n_lat = n.get("lat")
-                n_lon = n.get("lon")
-                if n_lat and n_lon:
-                    lines.append(f"  📍 <a href='https://www.openstreetmap.org/?mlat={n_lat}&mlon={n_lon}#map=14/{n_lat}/{n_lon}'>Posizione GPS ({n_lat:.4f}, {n_lon:.4f})</a>")
-            await send_telegram("\n".join(lines), chat_id=chat_id)
+            lines = ["📜 <b>Ultimi messaggi Room Server:</b>\n"]
+            for m in recent:
+                snr_str = f" (SNR {m['snr']:+.1f}dB)" if m.get("snr") is not None else ""
+                lines.append(f"• <i>[{m['timestamp'][11:16]}]</i> [<b>{m['channel']}</b>] <b>{m['sender']}</b>{snr_str}: {m['content']}")
+            await send_telegram("\n".join(lines), chat_id=chat_id, reply_markup=build_main_menu_keyboard())
+
+    # ── Scansione nodi vicini ───────────────────────────────────────────────
+    elif data == "scan_nodes":
+        await ack("🔍 Scansione avviata...")
+        if not active_heltec_ws:
+            await send_telegram("⚠️ Heltec non connessa. Impossibile eseguire la scansione.", chat_id=chat_id, reply_markup=build_main_menu_keyboard())
+        else:
+            await send_telegram("🔍 <b>Scansione nodi vicini avviata...</b>\n<i>Invio beacon zero-hop e interrogazione contatti mesh. Attendi ~5 secondi...</i>", chat_id=chat_id)
+            frame_adv = build_send_self_advert_frame(flood=False)
+            await send_to_heltec(frame_adv)
+            await asyncio.sleep(0.2)
+            frame_contacts = build_get_contacts_frame(0)
+            await send_to_heltec(frame_contacts)
+            await asyncio.sleep(5.0)
+            nodes = get_recent_heard_nodes(30)
+            my_lat = node_info.get("lat")
+            my_lon = node_info.get("lon")
+            result_text = (
+                f"📡 <b>Risultati Scansione Nodi Vicini</b>\n\n"
+                + format_node_list_rich(nodes, my_lat, my_lon)
+            )
+            await send_telegram(result_text, chat_id=chat_id, reply_markup=build_main_menu_keyboard())
+
+    # ── Menu Impostazioni ───────────────────────────────────────────────────
+    elif data == "menu_settings":
+        await ack()
+        freq = node_info.get("freq_mhz", 868.0)
+        bw = node_info.get("bw_khz", 62.5)
+        sf = node_info.get("sf", 8)
+        cr = node_info.get("cr", 8)
+        tx = node_info.get("tx_power", 20)
+        name = node_info.get("name", "N/A")
+        lat = node_info.get("lat", "N/A")
+        lon = node_info.get("lon", "N/A")
+        heltec_ok = "🟢" if active_heltec_ws else "🔴"
+        await send_telegram(
+            f"⚙️ <b>Impostazioni Heltec V3</b>\n\n"
+            f"📻 <b>Radio:</b> {freq} MHz | BW {bw} kHz | SF{sf} CR4/{cr}\n"
+            f"⚡ <b>TX Power:</b> {tx} dBm\n"
+            f"🏷️ <b>Nome Nodo:</b> {name}\n"
+            f"📍 <b>GPS:</b> {lat}, {lon}\n"
+            f"🔌 <b>Heltec:</b> {heltec_ok} {'Connessa' if active_heltec_ws else 'Non connessa'}\n\n"
+            f"<i>Seleziona un'impostazione da modificare:</i>",
+            chat_id=chat_id,
+            reply_markup=build_settings_keyboard()
+        )
+
+    # ── Imposta parametri radio ─────────────────────────────────────────────
+    elif data == "set_radio":
+        await ack()
+        freq = node_info.get("freq_mhz", 868.0)
+        bw = node_info.get("bw_khz", 62.5)
+        sf = node_info.get("sf", 8)
+        cr = node_info.get("cr", 8)
+        chat_pending_input[chat_id] = "set_radio"
+        await send_telegram(
+            f"📻 <b>Parametri Radio Attuali:</b>\n"
+            f"• Frequenza: <b>{freq} MHz</b>\n"
+            f"• Bandwidth: <b>{bw} kHz</b>\n"
+            f"• Spreading Factor: <b>SF{sf}</b>\n"
+            f"• Coding Rate: <b>4/{cr}</b>\n\n"
+            f"Invia i nuovi parametri nel formato:\n"
+            f"<code>FREQ BW SF CR</code>\n\n"
+            f"<b>Esempio:</b> <code>869.618 62.5 8 8</code>\n\n"
+            f"<i>Oppure invia /annulla per annullare.</i>",
+            chat_id=chat_id
+        )
+
+    # ── Imposta TX Power ────────────────────────────────────────────────────
+    elif data == "set_tx_power":
+        await ack()
+        chat_pending_input[chat_id] = "set_tx_power"
+        await send_telegram(
+            f"⚡ <b>TX Power attuale:</b> {node_info.get('tx_power', 20)} dBm\n\n"
+            f"Invia il nuovo valore in dBm (2-22):\n"
+            f"<b>Esempio:</b> <code>20</code>\n\n"
+            f"<i>Oppure invia /annulla per annullare.</i>",
+            chat_id=chat_id
+        )
+
+    # ── Imposta nome nodo ───────────────────────────────────────────────────
+    elif data == "set_name":
+        await ack()
+        chat_pending_input[chat_id] = "set_name"
+        await send_telegram(
+            f"🏷️ <b>Nome nodo attuale:</b> {node_info.get('name', 'N/A')}\n\n"
+            f"Invia il nuovo nome (max 31 caratteri):\n\n"
+            f"<i>Oppure invia /annulla per annullare.</i>",
+            chat_id=chat_id
+        )
+
+    # ── Imposta posizione GPS ───────────────────────────────────────────────
+    elif data == "set_gps":
+        await ack()
+        chat_pending_input[chat_id] = "set_gps"
+        await send_telegram(
+            f"📍 <b>GPS attuale:</b> lat={node_info.get('lat', 'N/A')}, lon={node_info.get('lon', 'N/A')}\n\n"
+            f"Invia le coordinate nel formato:\n"
+            f"<code>LATITUDINE LONGITUDINE</code>\n\n"
+            f"<b>Esempio:</b> <code>45.5231 8.8742</code>\n\n"
+            f"<i>Oppure invia /annulla per annullare.</i>",
+            chat_id=chat_id
+        )
+
+    # ── Invia beacon advert ─────────────────────────────────────────────────
+    elif data == "send_beacon":
+        await ack("Invio beacon...")
+        if active_heltec_ws:
+            frame = build_send_self_advert_frame(flood=True)
+            sent = await send_to_heltec(frame)
+            if sent:
+                await send_telegram("📢 <b>Beacon Advert trasmesso via radio (flood)!</b>\nI nodi vicini aggiorneranno la loro lista contatti.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+            else:
+                await send_telegram("⚠️ Errore nell'invio del beacon.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+        else:
+            await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+
+    # ── Sync orario ─────────────────────────────────────────────────────────
+    elif data == "sync_time":
+        await ack("Sincronizzazione orario...")
+        if active_heltec_ws:
+            frame = build_set_device_time_frame()
+            sent = await send_to_heltec(frame)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if sent:
+                await send_telegram(f"🕐 <b>Orario sincronizzato!</b>\n<code>{ts}</code>", chat_id=chat_id, reply_markup=build_settings_keyboard())
+            else:
+                await send_telegram("⚠️ Errore nella sincronizzazione.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+        else:
+            await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+
+    # ── Riavvio (conferma) ──────────────────────────────────────────────────
+    elif data == "reboot_confirm":
+        await ack()
+        await send_telegram(
+            "⚠️ <b>Conferma Riavvio Heltec V3</b>\n\nSei sicuro di voler riavviare la scheda?\nLa connessione sarà interrotta per circa 30 secondi.",
+            chat_id=chat_id,
+            reply_markup=build_reboot_confirm_keyboard()
+        )
+
+    # ── Riavvio (eseguito) ──────────────────────────────────────────────────
+    elif data == "reboot_yes":
+        await ack("Riavvio in corso...")
+        if active_heltec_ws:
+            frame = build_reboot_frame()
+            sent = await send_to_heltec(frame)
+            if sent:
+                await send_telegram("🔁 <b>Comando di riavvio inviato alla Heltec V3!</b>\nLa scheda si riavvierà a breve e si riconnetterà automaticamente.", chat_id=chat_id, reply_markup=build_main_menu_keyboard())
+            else:
+                await send_telegram("⚠️ Errore nell'invio del comando.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+        else:
+            await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
 
 async def telegram_polling_loop():
     if not TELEGRAM_BOT_TOKEN:
@@ -1304,7 +1627,7 @@ async def telegram_polling_loop():
                     active_idx = chat_active_channel.get(chat_id, default_channel_idx)
                     active_name = discovered_channels.get(active_idx, f"Canale #{active_idx}")
 
-                    if text.startswith("/start"):
+                    if text.startswith("/start") or text.startswith("/menu"):
                         parts = text.split(maxsplit=1)
                         if len(parts) > 1 and parts[1].startswith("c_"):
                             # Deep link: /start c_1 -> set active channel to 1
@@ -1321,25 +1644,13 @@ async def telegram_polling_loop():
                                 )
                                 continue
 
-                        status_str = "🟢 Connessa" if active_heltec_ws else "🔴 Non connessa (in attesa di segnale)"
-                        welcome_text = (
-                            f"👋 Ciao <b>{sender_name}</b>!\n\n"
-                            f"Sono la tua stazione <b>MeshCore Room Bot & Bridge Avanzato</b>.\n"
-                            f"• Stato Heltec V3: <b>{status_str}</b>\n"
-                            f"• Canale LoRa attivo: <b>[{active_idx}] {active_name}</b>\n\n"
-                            f"<b>Comandi Canali:</b>\n"
-                            f"• <code>/canali</code>: Lista canali e bottoni di selezione\n"
-                            f"• <code>/canale [nome|numero]</code>: Seleziona canale attivo\n"
-                            f"• <code>/c [nome|numero] [testo]</code>: Invia a un canale specifico\n"
-                            f"• <code>#canale [testo]</code>: Invia a un canale al volo\n\n"
-                            f"<b>Funzioni Avanzate:</b>\n"
-                            f"• <code>/app</code>: Apri il Web Client grafico dal browser\n"
-                            f"• <code>/nodi</code>: Registro dei nodi radio ascoltati\n"
-                            f"• <code>/report</code>: Bollettino tecnico della stazione\n"
-                            f"• <code>/associa_topic [canale]</code>: Collega questo topic Telegram al canale LoRa\n"
-                            f"• <code>/room</code>: Mostra gli ultimi messaggi salvati"
+                        greeting = f"👋 Ciao <b>{sender_name}</b>!\n\n" if text.startswith("/start") else ""
+                        await send_telegram(
+                            greeting + build_main_menu_text(chat_id),
+                            chat_id=chat_id,
+                            reply_markup=build_main_menu_keyboard(),
+                            message_thread_id=thread_id
                         )
-                        await send_telegram(welcome_text, chat_id=chat_id, reply_markup=build_channels_keyboard(active_idx), message_thread_id=thread_id)
 
                     elif text.startswith("/status"):
                         status_str = "🟢 Connessa" if active_heltec_ws else "🔴 Non connessa"
@@ -1506,7 +1817,112 @@ async def telegram_polling_loop():
                         else:
                             await send_telegram("⚠️ Heltec non connessa al cloud in questo momento.", chat_id=chat_id, message_thread_id=thread_id)
 
+                    elif text.startswith("/annulla") or text.startswith("/cancel"):
+                        # Annulla qualsiasi input pendente
+                        chat_pending_input.pop(chat_id, None)
+                        await send_telegram(
+                            "❌ <b>Operazione annullata.</b>",
+                            chat_id=chat_id,
+                            reply_markup=build_main_menu_keyboard(),
+                            message_thread_id=thread_id
+                        )
+
                     else:
+                        # ── Gestione input pendente (impostazioni) ──────────────────────
+                        pending = chat_pending_input.get(chat_id)
+                        if pending:
+                            chat_pending_input.pop(chat_id, None)
+
+                            if pending == "set_name":
+                                new_name = text.strip()[:31]
+                                if active_heltec_ws:
+                                    frame = build_set_advert_name_frame(new_name)
+                                    sent = await send_to_heltec(frame)
+                                    if sent:
+                                        node_info["name"] = new_name
+                                        await send_telegram(f"✅ <b>Nome nodo aggiornato:</b> <b>{new_name}</b>", chat_id=chat_id, reply_markup=build_settings_keyboard(), message_thread_id=thread_id)
+                                    else:
+                                        await send_telegram("⚠️ Errore nell'aggiornamento del nome. Heltec disconnessa?", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                else:
+                                    await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+
+                            elif pending == "set_tx_power":
+                                try:
+                                    tx_pwr = int(text.strip())
+                                    if not (2 <= tx_pwr <= 22):
+                                        raise ValueError
+                                    if active_heltec_ws:
+                                        frame = build_set_tx_power_frame(tx_pwr)
+                                        sent = await send_to_heltec(frame)
+                                        if sent:
+                                            node_info["tx_power"] = tx_pwr
+                                            await send_telegram(f"✅ <b>TX Power aggiornato:</b> {tx_pwr} dBm", chat_id=chat_id, reply_markup=build_settings_keyboard(), message_thread_id=thread_id)
+                                        else:
+                                            await send_telegram("⚠️ Errore nell'aggiornamento. Heltec disconnessa?", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                    else:
+                                        await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                except ValueError:
+                                    await send_telegram("⚠️ Valore non valido. Inserisci un numero intero tra 2 e 22.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+
+                            elif pending == "set_radio":
+                                try:
+                                    parts_r = text.strip().split()
+                                    freq = float(parts_r[0])
+                                    bw = float(parts_r[1])
+                                    sf = int(parts_r[2])
+                                    cr = int(parts_r[3])
+                                    if active_heltec_ws:
+                                        frame_r = build_set_radio_params_frame(freq, bw, sf, cr)
+                                        sent = await send_to_heltec(frame_r)
+                                        if sent:
+                                            node_info["freq_mhz"] = freq
+                                            node_info["bw_khz"] = bw
+                                            node_info["sf"] = sf
+                                            node_info["cr"] = cr
+                                            await send_telegram(
+                                                f"✅ <b>Parametri radio aggiornati!</b>\n{freq} MHz | BW {bw} kHz | SF{sf} CR4/{cr}",
+                                                chat_id=chat_id, reply_markup=build_settings_keyboard(), message_thread_id=thread_id
+                                            )
+                                        else:
+                                            await send_telegram("⚠️ Errore nell'aggiornamento. Heltec disconnessa?", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                    else:
+                                        await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                except (ValueError, IndexError):
+                                    await send_telegram(
+                                        "⚠️ Formato non valido. Usa:\n<code>FREQ BW SF CR</code>\nEsempio: <code>869.618 62.5 8 8</code>",
+                                        chat_id=chat_id, reply_markup=build_settings_keyboard()
+                                    )
+
+                            elif pending == "set_gps":
+                                try:
+                                    parts_g = text.strip().split()
+                                    lat_v = float(parts_g[0])
+                                    lon_v = float(parts_g[1])
+                                    if not (-90 <= lat_v <= 90 and -180 <= lon_v <= 180):
+                                        raise ValueError
+                                    if active_heltec_ws:
+                                        frame_ll = build_set_advert_latlon_frame(lat_v, lon_v)
+                                        sent = await send_to_heltec(frame_ll)
+                                        if sent:
+                                            node_info["lat"] = lat_v
+                                            node_info["lon"] = lon_v
+                                            await send_telegram(
+                                                f"✅ <b>Posizione GPS aggiornata:</b>\n📍 ({lat_v:.6f}, {lon_v:.6f})",
+                                                chat_id=chat_id, reply_markup=build_settings_keyboard(), message_thread_id=thread_id
+                                            )
+                                        else:
+                                            await send_telegram("⚠️ Errore nell'aggiornamento. Heltec disconnessa?", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                    else:
+                                        await send_telegram("⚠️ Heltec non connessa.", chat_id=chat_id, reply_markup=build_settings_keyboard())
+                                except (ValueError, IndexError):
+                                    await send_telegram(
+                                        "⚠️ Formato non valido. Usa:\n<code>LATITUDINE LONGITUDINE</code>\nEsempio: <code>45.5231 8.8742</code>",
+                                        chat_id=chat_id, reply_markup=build_settings_keyboard()
+                                    )
+
+                            continue  # Skip radio forwarding when handling settings input
+
+                        # ── Messaggio libero → invia alla radio ─────────────────────────
                         target_ch_idx = active_idx
                         target_ch_name = active_name
                         payload_text = text
