@@ -7,9 +7,10 @@ import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
+from web_client import get_web_client_html
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8799543336:AAExe5g_-6ud-4kAX4p_EVtovS_R7KqSToM")
@@ -20,12 +21,25 @@ app = FastAPI(title="MeshCore Telegram Room Bridge")
 
 # Global State
 active_heltec_ws: Optional[WebSocket] = None
+active_browser_clients: set = set()
 stats = {
     "packets_rx": 0,
     "packets_tx": 0,
     "connected_since": None,
     "last_seen": None
 }
+
+async def broadcast_to_browsers(payload: dict):
+    if not active_browser_clients:
+        return
+    dead = set()
+    for ws in list(active_browser_clients):
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.add(ws)
+    for ws in dead:
+        active_browser_clients.discard(ws)
 
 # MeshCore Channels and Node Cache
 discovered_channels: Dict[int, str] = {0: "Public"}
@@ -430,6 +444,7 @@ async def health():
         "discovered_channels": discovered_channels,
         "node_info": node_info,
         "stats": stats,
+        "active_web_clients": len(active_browser_clients),
         "recent_nodes": get_recent_heard_nodes(5)
     }
 
@@ -476,9 +491,19 @@ async def home():
             .card {{ background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; }}
             h1 {{ font-size: 1.4rem; color: #1f2937; margin-top: 0; }}
             .stat {{ display: inline-block; margin-right: 20px; font-size: 0.95rem; margin-top: 6px; }}
+            .cta-banner {{ background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 18px 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 14px rgba(16,185,129,0.3); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }}
+            .cta-btn {{ background: white; color: #047857; padding: 10px 20px; border-radius: 8px; font-weight: 700; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); }}
         </style>
     </head>
     <body>
+        <div class="cta-banner">
+            <div>
+                <div style="font-size: 1.15rem; font-weight: bold;">📱 MeshCore Web Client Disponibile!</div>
+                <div style="font-size: 0.88rem; opacity: 0.95; margin-top: 2px;">Chat in tempo reale, canali e trasmissione radio LoRa dal tuo browser.</div>
+            </div>
+            <a href="/app" class="cta-btn">🚀 Apri Web App</a>
+        </div>
+
         <div class="card">
             <h1>📡 MeshCore Room Server & Bridge</h1>
             <p>Stato Heltec V3: {status_badge} &nbsp;|&nbsp; Nodo: <b>{node_info.get('name', 'N/A')}</b> ({node_info.get('freq_mhz', 868.0)} MHz)</p>
@@ -502,6 +527,126 @@ async def home():
     </html>
     """
 
+@app.get("/app", response_class=HTMLResponse)
+async def web_app():
+    return HTMLResponse(get_web_client_html())
+
+@app.get("/web", response_class=HTMLResponse)
+async def web_alias():
+    return HTMLResponse(get_web_client_html())
+
+@app.websocket("/ws/client")
+async def websocket_client_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    active_browser_clients.add(websocket)
+    try:
+        init_payload = {
+            "type": "init",
+            "heltec_connected": active_heltec_ws is not None,
+            "node_info": node_info,
+            "channels": discovered_channels,
+            "stats": stats,
+            "recent_messages": get_recent_messages(60),
+            "recent_nodes": get_recent_heard_nodes(25)
+        }
+        await websocket.send_json(init_payload)
+
+        while True:
+            data = await websocket.receive_json()
+            action = data.get("action")
+            if action == "send_message":
+                ch_idx = int(data.get("channel_idx", 0))
+                text = str(data.get("text", "")).strip()
+                sender = str(data.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
+                if text:
+                    ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
+                    save_message("Web Client", sender, ch_name, text)
+                    frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
+                    sent = await send_to_heltec(frame)
+
+                    tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n👤 <b>{sender}</b>: {text}"
+                    await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
+
+                    await broadcast_to_browsers({
+                        "type": "new_message",
+                        "source": "Web Client",
+                        "sender": sender,
+                        "channel": ch_name,
+                        "channel_idx": ch_idx,
+                        "content": text,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "snr": None,
+                        "hops": 0,
+                        "sent_to_radio": sent
+                    })
+            elif action == "refresh_channels":
+                if active_heltec_ws:
+                    await query_all_heltec_channels()
+            elif action == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print("Web client socket error:", e)
+    finally:
+        active_browser_clients.discard(websocket)
+
+@app.get("/api/status")
+async def api_status():
+    return {
+        "status": "ok",
+        "heltec_connected": active_heltec_ws is not None,
+        "discovered_channels": discovered_channels,
+        "node_info": node_info,
+        "stats": stats,
+        "active_web_clients": len(active_browser_clients)
+    }
+
+@app.get("/api/messages")
+async def api_messages(limit: int = 50, channel: Optional[str] = None):
+    return get_recent_messages(limit, channel=channel)
+
+@app.get("/api/nodes")
+async def api_nodes(limit: int = 30):
+    return get_recent_heard_nodes(limit)
+
+@app.post("/api/send")
+async def api_send(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    text = str(body.get("text", "")).strip()
+    if not text:
+        return JSONResponse({"error": "Empty message"}, status_code=400)
+
+    ch_idx = int(body.get("channel_idx", 0))
+    ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
+    sender = str(body.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
+
+    save_message("Web API", sender, ch_name, text)
+    frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
+    sent = await send_to_heltec(frame)
+
+    tg_msg = f"🌐 <b>[Web API ➔ Canale {ch_idx}: {ch_name}]</b>\n👤 <b>{sender}</b>: {text}"
+    await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
+
+    await broadcast_to_browsers({
+        "type": "new_message",
+        "source": "Web API",
+        "sender": sender,
+        "channel": ch_name,
+        "channel_idx": ch_idx,
+        "content": text,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "snr": None,
+        "hops": 0,
+        "sent_to_radio": sent
+    })
+
+    return {"success": True, "sent_to_heltec": sent, "channel": ch_name}
+
 @app.websocket("/ws/mesh")
 async def websocket_mesh_endpoint(websocket: WebSocket):
     global active_heltec_ws, stats, discovered_channels, node_info
@@ -512,6 +657,13 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
     
     print("Heltec V3 connected via WebSocket!")
     await broadcast_telegram("🟢 <b>Heltec V3 collegata con successo al server Render!</b>\nInterrogo la scheda per leggere i canali configurati...")
+    await broadcast_to_browsers({
+        "type": "status",
+        "heltec_connected": True,
+        "node_info": node_info,
+        "channels": discovered_channels,
+        "stats": stats
+    })
 
     asyncio.create_task(query_all_heltec_channels())
 
@@ -537,6 +689,10 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     if ch_name:
                         discovered_channels[ch_idx] = ch_name
                         print(f"Heltec Channel [{ch_idx}]: {ch_name}")
+                        await broadcast_to_browsers({
+                            "type": "channels",
+                            "channels": discovered_channels
+                        })
 
                 # RESP_CODE_SELF_INFO = 5
                 elif code == 5 and len(payload) >= 58:
@@ -550,6 +706,10 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         node_info["sf"] = payload[56]
                         node_info["cr"] = payload[57]
                         print(f"Heltec Node Info: {node_name}, {freq_khz/1000.0} MHz")
+                        await broadcast_to_browsers({
+                            "type": "node_info",
+                            "node_info": node_info
+                        })
                     except Exception as e:
                         print("Error parsing SELF_INFO:", e)
 
@@ -595,6 +755,19 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
 
                     reply_markup = build_message_inline_keyboard(ch_idx, ch_name)
                     await broadcast_telegram(formatted_post, reply_markup=reply_markup, lora_channel_idx=ch_idx)
+                    await broadcast_to_browsers({
+                        "type": "new_message",
+                        "source": "LoRa Mesh",
+                        "sender": sender_name,
+                        "channel": ch_name,
+                        "channel_idx": ch_idx,
+                        "content": content_text,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "snr": snr,
+                        "hops": path_len,
+                        "lat": lat,
+                        "lon": lon
+                    })
                     await send_to_heltec(build_sync_next_msg_frame())
 
                 # RESP_CODE_CHANNEL_MSG_RECV = 8 (0x08)
@@ -625,6 +798,19 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
 
                     reply_markup = build_message_inline_keyboard(ch_idx, ch_name)
                     await broadcast_telegram(formatted_post, reply_markup=reply_markup, lora_channel_idx=ch_idx)
+                    await broadcast_to_browsers({
+                        "type": "new_message",
+                        "source": "LoRa Mesh",
+                        "sender": sender_name,
+                        "channel": ch_name,
+                        "channel_idx": ch_idx,
+                        "content": content_text,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "snr": None,
+                        "hops": path_len,
+                        "lat": lat,
+                        "lon": lon
+                    })
                     await send_to_heltec(build_sync_next_msg_frame())
 
                 # PUSH_CODE_NEW_ADVERT (0x8A) or PUSH_CODE_ADVERT (0x80)
@@ -640,6 +826,10 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         if contact_name:
                             record_heard_node(contact_name, None, out_path_len, "Advert", adv_lat, adv_lon)
                             print(f"Discovered LoRa Advert from: {contact_name}")
+                            await broadcast_to_browsers({
+                                "type": "nodes",
+                                "nodes": get_recent_heard_nodes(25)
+                            })
                     except Exception as e:
                         print("Error parsing advert frame:", e)
 
@@ -650,6 +840,17 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         msg_text = payload[offset_txt:].decode("utf-8", errors="ignore").strip()
                         save_message("LoRa Mesh", "Nodo Radio", "Direct", msg_text)
                         await broadcast_telegram(f"💬 <b>[Messaggio Diretto LoRa]</b>\n{msg_text}")
+                        await broadcast_to_browsers({
+                            "type": "new_message",
+                            "source": "LoRa Mesh",
+                            "sender": "Nodo Radio",
+                            "channel": "Direct",
+                            "channel_idx": 0,
+                            "content": msg_text,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "snr": None,
+                            "hops": 0
+                        })
                     await send_to_heltec(build_sync_next_msg_frame())
 
                 # RESP_CODE_NO_MORE_MESSAGES = 10
@@ -668,6 +869,13 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
         if active_heltec_ws == websocket:
             active_heltec_ws = None
         await broadcast_telegram("🔴 <b>Heltec V3 disconnessa dal server Render.</b>\nIn attesa di riconnessione automatica...")
+        await broadcast_to_browsers({
+            "type": "status",
+            "heltec_connected": False,
+            "node_info": node_info,
+            "channels": discovered_channels,
+            "stats": stats
+        })
 
 async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
     cq_id = cq["id"]
@@ -795,6 +1003,7 @@ async def telegram_polling_loop():
                             f"• <code>/c [nome|numero] [testo]</code>: Invia a un canale specifico\n"
                             f"• <code>#canale [testo]</code>: Invia a un canale al volo\n\n"
                             f"<b>Funzioni Avanzate:</b>\n"
+                            f"• <code>/app</code>: Apri il Web Client grafico dal browser\n"
                             f"• <code>/nodi</code>: Registro dei nodi radio ascoltati\n"
                             f"• <code>/report</code>: Bollettino tecnico della stazione\n"
                             f"• <code>/associa_topic [canale]</code>: Collega questo topic Telegram al canale LoRa\n"
@@ -906,6 +1115,16 @@ async def telegram_polling_loop():
                                     message_thread_id=thread_id
                                 )
 
+                    elif text.startswith("/app") or text.startswith("/web"):
+                        await send_telegram(
+                            "🌐 <b>MeshCore Web Client</b>\n\n"
+                            "Puoi aprire la console web interattiva direttamente dal browser del telefono o PC:\n"
+                            "🔗 https://meshcore-room-bot.onrender.com/app\n\n"
+                            "<i>Include chat in tempo reale, cambio canali con un tocco, telemetria radio e lista dei nodi ascoltati.</i>",
+                            chat_id=chat_id,
+                            message_thread_id=thread_id
+                        )
+
                     elif text.startswith("/c ") or text.startswith("/channel_msg "):
                         parts = text.split(maxsplit=2)
                         if len(parts) < 3:
@@ -921,6 +1140,17 @@ async def telegram_polling_loop():
                                 save_message("Telegram", sender_name, ch_name, content)
                                 frame = build_channel_send_frame(resolved, f"[{sender_name}]: {content}")
                                 sent = await send_to_heltec(frame)
+                                await broadcast_to_browsers({
+                                    "type": "new_message",
+                                    "source": "Telegram",
+                                    "sender": sender_name,
+                                    "channel": ch_name,
+                                    "channel_idx": resolved,
+                                    "content": content,
+                                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "snr": None,
+                                    "hops": 0
+                                })
                                 if sent:
                                     await send_telegram(f"📡 <i>Trasmesso su [Canale {resolved}: {ch_name}] via LoRa:</i>\n\"{content}\"", chat_id=chat_id, message_thread_id=thread_id)
                                 else:
@@ -965,6 +1195,17 @@ async def telegram_polling_loop():
                         save_message("Telegram", sender_name, target_ch_name, payload_text)
                         frame = build_channel_send_frame(target_ch_idx, f"[{sender_name}]: {payload_text}")
                         sent = await send_to_heltec(frame)
+                        await broadcast_to_browsers({
+                            "type": "new_message",
+                            "source": "Telegram",
+                            "sender": sender_name,
+                            "channel": target_ch_name,
+                            "channel_idx": target_ch_idx,
+                            "content": payload_text,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "snr": None,
+                            "hops": 0
+                        })
                         if sent:
                             await send_telegram(f"📡 <i>Trasmesso su [Canale {target_ch_idx}: {target_ch_name}] via LoRa:</i>\n\"{payload_text}\"", chat_id=chat_id, message_thread_id=thread_id)
                         else:
