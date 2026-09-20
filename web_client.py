@@ -14,20 +14,25 @@ def get_web_client_html() -> str:
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
     <style>
         :root {
-            --bg: #0b0f19;
+            --bg: #090d16;
             --surface: #111827;
-            --surface-hover: #1f293d;
-            --border: #1f2937;
-            --border-highlight: #374151;
-            --text-main: #f9fafb;
-            --text-muted: #9ca3af;
-            --text-dim: #6b7280;
+            --surface-card: #162032;
+            --surface-hover: #1e293b;
+            --border: #1f2d42;
+            --border-highlight: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
             --primary: #10b981;
             --primary-dark: #059669;
+            --primary-glow: rgba(16, 185, 129, 0.25);
             --accent-blue: #38bdf8;
             --accent-purple: #a855f7;
             --accent-amber: #f59e0b;
             --danger: #ef4444;
+            --ack-sent: #94a3b8;
+            --ack-air: #38bdf8;
+            --ack-ok: #10b981;
         }
 
         * {
@@ -46,11 +51,14 @@ def get_web_client_html() -> str:
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            user-select: none;
         }
 
-        /* Header */
+        /* Top Header Bar */
         header {
-            background: var(--surface);
+            background: rgba(17, 24, 39, 0.94);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
             padding: 10px 16px;
             display: flex;
@@ -58,7 +66,7 @@ def get_web_client_html() -> str:
             justify-content: space-between;
             gap: 12px;
             flex-shrink: 0;
-            z-index: 20;
+            z-index: 30;
         }
 
         .header-brand {
@@ -67,60 +75,79 @@ def get_web_client_html() -> str:
             gap: 10px;
         }
 
-        .logo-icon {
-            font-size: 1.5rem;
-            line-height: 1;
+        .logo-box {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            background: linear-gradient(135deg, #10b981, #0284c7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.15rem;
+            box-shadow: 0 2px 10px rgba(16, 185, 129, 0.35);
+        }
+
+        .brand-meta {
+            display: flex;
+            flex-direction: column;
         }
 
         .brand-title {
-            font-size: 1.05rem;
+            font-size: 1.02rem;
             font-weight: 700;
-            letter-spacing: -0.02em;
+            letter-spacing: -0.01em;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
 
-        .badge-status {
-            display: inline-flex;
+        .brand-node {
+            font-size: 0.76rem;
+            color: var(--text-muted);
+            display: flex;
             align-items: center;
             gap: 6px;
-            padding: 3px 8px;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
         }
 
-        .badge-status.online {
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 8px;
+            border-radius: 9999px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+
+        .status-badge.online {
             background: rgba(16, 185, 129, 0.15);
             color: #34d399;
             border: 1px solid rgba(16, 185, 129, 0.3);
         }
 
-        .badge-status.offline {
+        .status-badge.offline {
             background: rgba(239, 68, 68, 0.15);
             color: #f87171;
             border: 1px solid rgba(239, 68, 68, 0.3);
         }
 
         .pulse-dot {
-            width: 7px;
-            height: 7px;
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
             background: currentColor;
             display: inline-block;
         }
 
-        .badge-status.online .pulse-dot {
-            box-shadow: 0 0 8px #10b981;
+        .status-badge.online .pulse-dot {
+            box-shadow: 0 0 6px #10b981;
             animation: pulse 2s infinite;
         }
 
         @keyframes pulse {
             0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.4; transform: scale(0.85); }
+            50% { opacity: 0.35; transform: scale(0.8); }
         }
 
         .header-actions {
@@ -129,66 +156,57 @@ def get_web_client_html() -> str:
             gap: 8px;
         }
 
-        .icon-btn {
-            background: var(--surface-hover);
+        .btn-icon {
+            background: var(--surface-card);
             border: 1px solid var(--border);
             color: var(--text-main);
-            padding: 6px 10px;
+            padding: 7px 10px;
             border-radius: 8px;
-            font-size: 0.85rem;
-            font-weight: 500;
+            font-size: 0.82rem;
             cursor: pointer;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
             transition: all 0.15s ease;
             text-decoration: none;
         }
 
-        .icon-btn:hover {
+        .btn-icon:hover {
             border-color: var(--border-highlight);
-            background: #283548;
-        }
-
-        .icon-btn.active {
-            background: rgba(56, 189, 248, 0.15);
-            border-color: rgba(56, 189, 248, 0.4);
-            color: var(--accent-blue);
-        }
-
-        /* Mobile View Switcher */
-        .mobile-tabs {
-            display: none;
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            padding: 6px 12px;
-            gap: 8px;
-            flex-shrink: 0;
-        }
-
-        .mobile-tab-btn {
-            flex: 1;
-            padding: 6px;
-            border-radius: 6px;
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            font-size: 0.85rem;
-            font-weight: 600;
-            cursor: pointer;
-            text-align: center;
-        }
-
-        .mobile-tab-btn.active {
             background: var(--surface-hover);
-            color: var(--text-main);
         }
 
-        /* Channels Bar */
-        .channels-bar {
-            background: #0d1322;
+        /* Main View Container */
+        .app-view-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .tab-screen {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+
+        .tab-screen.active {
+            display: flex;
+        }
+
+        /* TAB 1: MESSAGES */
+        .channels-nav-bar {
+            background: #0b111e;
             border-bottom: 1px solid var(--border);
-            padding: 8px 16px;
+            padding: 8px 12px;
             display: flex;
             align-items: center;
             gap: 8px;
@@ -197,26 +215,16 @@ def get_web_client_html() -> str:
             flex-shrink: 0;
         }
 
-        .channels-bar::-webkit-scrollbar {
+        .channels-nav-bar::-webkit-scrollbar {
             display: none;
         }
 
-        .ch-label {
-            font-size: 0.75rem;
-            color: var(--text-dim);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-right: 4px;
-            white-space: nowrap;
-        }
-
-        .ch-chip {
-            background: var(--surface);
+        .channel-chip {
+            background: var(--surface-card);
             border: 1px solid var(--border);
             color: var(--text-muted);
-            padding: 5px 12px;
-            border-radius: 9999px;
+            padding: 6px 13px;
+            border-radius: 20px;
             font-size: 0.82rem;
             font-weight: 500;
             cursor: pointer;
@@ -227,944 +235,1162 @@ def get_web_client_html() -> str:
             transition: all 0.15s ease;
         }
 
-        .ch-chip:hover {
+        .channel-chip:hover {
             border-color: var(--border-highlight);
             color: var(--text-main);
         }
 
-        .ch-chip.active {
-            background: rgba(16, 185, 129, 0.2);
+        .channel-chip.active {
+            background: var(--primary);
             border-color: var(--primary);
-            color: #34d399;
-            font-weight: 600;
+            color: #022c22;
+            font-weight: 700;
+            box-shadow: 0 2px 8px var(--primary-glow);
         }
 
-        .ch-count-badge {
-            background: rgba(255, 255, 255, 0.1);
-            font-size: 0.7rem;
-            padding: 1px 5px;
-            border-radius: 10px;
-        }
-
-        /* Main Container */
-        .main-container {
-            display: flex;
+        .chat-messages-scroll {
             flex: 1;
-            overflow: hidden;
-            position: relative;
-        }
-
-        /* Chat Section */
-        .chat-section {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            background: var(--bg);
-            border-right: 1px solid var(--border);
-        }
-
-        .messages-container {
-            flex: 1;
+            padding: 14px 16px;
             overflow-y: auto;
-            padding: 16px;
             display: flex;
             flex-direction: column;
             gap: 12px;
             scroll-behavior: smooth;
         }
 
-        .message-bubble {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 12px 14px;
-            max-width: 90%;
-            align-self: flex-start;
+        .chat-date-separator {
+            text-align: center;
+            margin: 6px 0;
             position: relative;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-            transition: border-color 0.2s;
         }
 
-        .message-bubble.from-lora {
-            border-left: 4px solid var(--primary);
+        .chat-date-separator span {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
-        .message-bubble.from-telegram {
-            border-left: 4px solid var(--accent-blue);
+        .msg-bubble-wrap {
+            display: flex;
+            flex-direction: column;
+            max-width: 82%;
+            animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         }
 
-        .message-bubble.from-web {
-            border-left: 4px solid var(--accent-purple);
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .msg-bubble-wrap.outgoing {
             align-self: flex-end;
-            background: #141c2e;
+            align-items: flex-end;
         }
 
-        .msg-header {
+        .msg-bubble-wrap.incoming {
+            align-self: flex-start;
+            align-items: flex-start;
+        }
+
+        .msg-sender-name {
+            font-size: 0.73rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 3px;
             display: flex;
             align-items: center;
-            gap: 8px;
-            margin-bottom: 6px;
-            flex-wrap: wrap;
+            gap: 6px;
         }
 
-        .msg-sender {
-            font-weight: 700;
-            font-size: 0.9rem;
-            color: var(--text-main);
-        }
-
-        .msg-ch-tag {
-            font-size: 0.72rem;
-            padding: 2px 7px;
-            border-radius: 4px;
-            font-weight: 600;
-            background: #1f293d;
-            color: var(--accent-blue);
-        }
-
-        .msg-source-tag {
-            font-size: 0.7rem;
-            color: var(--text-dim);
-        }
-
-        .msg-time {
-            font-size: 0.72rem;
-            color: var(--text-dim);
-            margin-left: auto;
-        }
-
-        .msg-body {
-            font-size: 0.95rem;
-            line-height: 1.45;
-            color: #e5e7eb;
+        .msg-bubble {
+            padding: 10px 14px;
+            border-radius: 14px;
+            font-size: 0.92rem;
+            line-height: 1.42;
             word-break: break-word;
+            position: relative;
+            user-select: text;
+        }
+
+        .msg-bubble-wrap.outgoing .msg-bubble {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+            border-bottom-right-radius: 3px;
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.25);
+        }
+
+        .msg-bubble-wrap.incoming .msg-bubble {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-bottom-left-radius: 3px;
         }
 
         .msg-footer {
-            margin-top: 8px;
-            padding-top: 6px;
-            border-top: 1px solid rgba(255, 255, 255, 0.06);
             display: flex;
             align-items: center;
-            gap: 10px;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            flex-wrap: wrap;
+            gap: 6px;
+            font-size: 0.71rem;
+            margin-top: 3px;
+            color: var(--text-dim);
         }
 
-        .signal-pill {
+        .ack-indicator {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 3px;
+            font-weight: 600;
         }
 
-        .signal-pill.good { color: #34d399; }
-        .signal-pill.fair { color: #fbbf24; }
-        .signal-pill.poor { color: #fb923c; }
-
-        .map-btn {
-            color: var(--accent-blue);
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            font-weight: 500;
+        .ack-indicator.pending {
+            color: var(--ack-sent);
         }
 
-        .map-btn:hover {
-            text-decoration: underline;
+        .ack-indicator.air {
+            color: var(--ack-air);
         }
 
-        /* Composer */
-        .composer {
+        .ack-indicator.confirmed {
+            color: var(--ack-ok);
+        }
+
+        .chat-input-container {
             background: var(--surface);
             border-top: 1px solid var(--border);
-            padding: 12px 16px;
+            padding: 10px 14px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
             flex-shrink: 0;
         }
 
-        .composer-top {
+        .chat-input-row {
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .input-callsign {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            color: var(--text-main);
-            padding: 6px 10px;
-            border-radius: 8px;
-            font-size: 0.82rem;
-            font-weight: 600;
-            width: 140px;
-        }
-
-        .select-channel {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            color: var(--accent-blue);
-            padding: 6px 10px;
-            border-radius: 8px;
-            font-size: 0.82rem;
-            font-weight: 600;
-            flex: 1;
-            cursor: pointer;
-        }
-
-        .composer-bottom {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .input-message {
+        .chat-input-row input[type="text"] {
             flex: 1;
             background: var(--bg);
             border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 10px 16px;
+            font-size: 0.92rem;
             color: var(--text-main);
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 0.95rem;
             outline: none;
-            transition: border-color 0.15s;
+            transition: border-color 0.15s ease;
         }
 
-        .input-message:focus {
+        .chat-input-row input[type="text"]:focus {
             border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
         }
 
         .btn-send {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
             background: var(--primary);
-            color: #052e16;
+            color: #022c22;
             border: none;
-            padding: 10px 18px;
-            border-radius: 10px;
-            font-size: 0.95rem;
-            font-weight: 700;
-            cursor: pointer;
-            display: inline-flex;
+            display: flex;
             align-items: center;
-            gap: 6px;
-            transition: all 0.15s;
-            white-space: nowrap;
+            justify-content: center;
+            font-size: 1.15rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            flex-shrink: 0;
+            box-shadow: 0 2px 8px var(--primary-glow);
         }
 
         .btn-send:hover {
-            background: var(--primary-dark);
-            color: #fff;
+            background: #34d399;
+            transform: scale(1.05);
         }
 
         .btn-send:active {
-            transform: scale(0.97);
+            transform: scale(0.95);
         }
 
-        /* Sidebar */
-        .sidebar {
-            width: 340px;
-            background: var(--surface);
-            display: flex;
-            flex-direction: column;
-            overflow-y: auto;
-            flex-shrink: 0;
-        }
-
-        .sidebar-panel {
-            padding: 16px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .sidebar-title {
-            font-size: 0.82rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-dim);
-            font-weight: 700;
-            margin-bottom: 12px;
+        .chat-tools-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            padding: 0 4px;
         }
 
-        .node-list {
+        /* TAB 2: NODI & MAPPA */
+        .content-scroll {
+            padding: 16px;
+            overflow-y: auto;
+            flex: 1;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 12px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .section-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
         .node-card {
-            background: var(--bg);
+            background: var(--surface-card);
             border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 8px 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .node-card-top {
+            border-radius: 12px;
+            padding: 12px 14px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 12px;
+            transition: all 0.15s ease;
         }
 
-        .node-name {
-            font-weight: 700;
-            font-size: 0.88rem;
-            color: var(--text-main);
+        .node-card:hover {
+            border-color: var(--border-highlight);
+            background: var(--surface-hover);
         }
 
-        .node-packets {
-            font-size: 0.7rem;
-            background: rgba(255, 255, 255, 0.08);
-            padding: 1px 6px;
+        .node-avatar {
+            width: 40px;
+            height: 40px;
             border-radius: 10px;
-            color: var(--text-muted);
+            background: linear-gradient(135deg, #1e293b, #334155);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            color: var(--text-main);
+            flex-shrink: 0;
+            border: 1px solid rgba(255,255,255,0.06);
         }
 
-        .node-card-meta {
+        .node-info-col {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .node-name-text {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .node-sub-text {
             font-size: 0.74rem;
             color: var(--text-muted);
+            margin-top: 2px;
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
         }
 
-        .station-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
+        .node-badge {
+            background: rgba(56, 189, 248, 0.12);
+            color: var(--accent-blue);
+            padding: 2px 7px;
+            border-radius: 6px;
+            font-size: 0.7rem;
+            font-weight: 600;
         }
 
-        .station-stat {
+        .node-actions-col {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: flex-end;
+        }
+
+        /* TAB 3: CANALI */
+        .channel-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .channel-card-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .channel-slot-badge {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.75rem;
+        }
+
+        /* TAB 4: IMPOSTAZIONI */
+        .settings-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+
+        .settings-card-title {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+        }
+
+        .form-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-row label {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .form-control {
             background: var(--bg);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 8px 10px;
-        }
-
-        .stat-label {
-            font-size: 0.7rem;
-            color: var(--text-dim);
-            text-transform: uppercase;
-        }
-
-        .stat-value {
-            font-size: 1.05rem;
-            font-weight: 700;
+            padding: 8px 12px;
             color: var(--text-main);
-            margin-top: 2px;
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.15s ease;
         }
 
-        .empty-state {
-            text-align: center;
-            color: var(--text-dim);
-            font-size: 0.85rem;
-            padding: 20px 10px;
+        .form-control:focus {
+            border-color: var(--primary);
         }
 
-        /* Responsive */
-        @media (max-width: 768px) {
-            .mobile-tabs {
-                display: flex;
-            }
+        .form-grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
 
-            .sidebar {
-                display: none;
-                width: 100%;
-            }
+        .btn-action {
+            background: var(--primary);
+            color: #022c22;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
 
-            .sidebar.mobile-visible {
-                display: flex;
-            }
+        .btn-action:hover {
+            background: #34d399;
+        }
 
-            .chat-section.mobile-hidden {
-                display: none;
-            }
+        .btn-action.btn-danger {
+            background: var(--danger);
+            color: white;
+        }
 
-            .input-callsign {
-                width: 110px;
-            }
+        .btn-action.btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-action.btn-secondary {
+            background: var(--surface-hover);
+            color: var(--text-main);
+            border: 1px solid var(--border-highlight);
+        }
+
+        .btn-action.btn-secondary:hover {
+            background: #334155;
+        }
+
+        /* Bottom Tab Navigation Bar */
+        .bottom-nav {
+            background: rgba(17, 24, 39, 0.96);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border-top: 1px solid var(--border);
+            padding: 6px 12px 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            flex-shrink: 0;
+            z-index: 40;
+        }
+
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 6px 14px;
+            border-radius: 10px;
+            transition: all 0.15s ease;
+            flex: 1;
+            max-width: 90px;
+        }
+
+        .nav-item:hover {
+            color: var(--text-main);
+        }
+
+        .nav-item.active {
+            color: var(--primary);
+        }
+
+        .nav-icon {
+            font-size: 1.3rem;
+            line-height: 1;
+            margin-bottom: 3px;
+        }
+
+        .nav-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            bottom: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 100;
+            pointer-events: none;
+            width: 90%;
+            max-width: 420px;
+        }
+
+        .toast-bubble {
+            background: var(--surface-card);
+            border: 1px solid var(--border-highlight);
+            color: var(--text-main);
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-size: 0.84rem;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            pointer-events: auto;
+        }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
 <body>
-
-    <!-- Header -->
+    <!-- Top Header -->
     <header>
         <div class="header-brand">
-            <span class="logo-icon">📡</span>
-            <div>
+            <div class="logo-box">📡</div>
+            <div class="brand-meta">
                 <div class="brand-title">
-                    MeshCore Web
-                    <span id="boardStatusBadge" class="badge-status offline">
+                    <span>MeshCore</span>
+                    <span id="connBadge" class="status-badge offline">
                         <span class="pulse-dot"></span>
-                        <span id="boardStatusText">Heltec Offline</span>
+                        <span id="connBadgeText">DISCONNESSO</span>
                     </span>
+                </div>
+                <div class="brand-node">
+                    <span id="nodeNameDisplay">Buscate</span> • <span id="radioFreqDisplay">869.618 MHz</span>
                 </div>
             </div>
         </div>
-
         <div class="header-actions">
-            <button id="soundToggleBtn" class="icon-btn" title="Notifiche Audio">
-                <span id="soundIcon">🔊</span>
-                <span style="display:none;" id="soundLabel">Audio</span>
-            </button>
-            <button id="refreshChannelsBtn" class="icon-btn" title="Aggiorna Canali Radio">
-                🔄
-            </button>
-            <a href="https://t.me/Meshcoreeliaxs_bot" target="_blank" class="icon-btn" title="Apri Bot Telegram">
-                ✈️ Bot
-            </a>
+            <button id="audioToggleBtn" class="btn-icon" title="Attiva/Disattiva Suoni">🔔</button>
+            <a href="https://t.me/Meshcoreeliaxs_bot" target="_blank" class="btn-icon" title="Apri Telegram">✈️ Telegram</a>
         </div>
     </header>
 
-    <!-- Mobile Navigation Tabs -->
-    <div class="mobile-tabs">
-        <button id="tabChatBtn" class="mobile-tab-btn active">💬 Canali & Chat</button>
-        <button id="tabNodesBtn" class="mobile-tab-btn">👥 Nodi & Telemetria</button>
+    <!-- Main Screens Container -->
+    <div class="app-view-container">
+
+        <!-- TAB 1: MESSAGGI (Chat Screen) -->
+        <div id="tabMessages" class="tab-screen active">
+            <!-- Channel Selection Chips -->
+            <div id="channelsNavBar" class="channels-nav-bar">
+                <!-- Dynamically filled -->
+            </div>
+
+            <!-- Messages Log -->
+            <div id="chatMessagesScroll" class="chat-messages-scroll">
+                <div class="chat-date-separator">
+                    <span>Oggi</span>
+                </div>
+                <!-- Chat bubbles dynamically filled -->
+            </div>
+
+            <!-- Input Bar -->
+            <div class="chat-input-container">
+                <div class="chat-input-row">
+                    <input type="text" id="messageInput" placeholder="Scrivi un messaggio LoRa..." autocomplete="off" />
+                    <button id="sendBtn" class="btn-send" title="Trasmetti messaggio via radio">➤</button>
+                </div>
+                <div class="chat-tools-row">
+                    <span>Canale: <b id="currentChannelName" style="color: var(--primary);">Public [0]</b></span>
+                    <span>Operatore: <input type="text" id="senderNameInput" value="Web-Operatore" style="background:transparent; border:none; color:var(--accent-blue); font-weight:600; width:110px; text-align:right;" /></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: NODI & MAPPA -->
+        <div id="tabNodes" class="tab-screen">
+            <div class="content-scroll">
+                <div class="section-header">
+                    <div class="section-title">👥 Nodi Radio Ascoltati (<span id="nodesCount">0</span>)</div>
+                    <button id="refreshNodesBtn" class="btn-icon">🔄 Aggiorna</button>
+                </div>
+                <div id="nodesListContainer" style="display:flex; flex-direction:column; gap:10px;">
+                    <!-- Filled dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: CANALI -->
+        <div id="tabChannels" class="tab-screen">
+            <div class="content-scroll">
+                <div class="section-header">
+                    <div class="section-title">📻 Configurazione Canali Heltec</div>
+                    <button id="refreshChannelsBtn" class="btn-icon">🔄 Interroga Scheda</button>
+                </div>
+
+                <!-- Form to Add/Edit Channel -->
+                <div class="settings-card">
+                    <div class="settings-card-title">➕ Salva / Modifica Canale</div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Slot Canale (0 - 39)</label>
+                            <input type="number" id="newChannelIdx" class="form-control" value="0" min="0" max="39" />
+                        </div>
+                        <div class="form-row">
+                            <label>Nome Canale</label>
+                            <input type="text" id="newChannelName" class="form-control" placeholder="es. Public, Italia, Emergenza..." />
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <label>Chiave Segreta PSK (Hex 16-byte o vuoto per Default)</label>
+                        <input type="text" id="newChannelPsk" class="form-control" placeholder="Default Public PSK (lascia vuoto)" />
+                    </div>
+                    <button id="saveChannelBtn" class="btn-action">💾 Salva Canale nella Heltec</button>
+                </div>
+
+                <!-- List of channels -->
+                <div id="channelsListContainer" style="display:flex; flex-direction:column; gap:10px;">
+                    <!-- Filled dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: IMPOSTAZIONI RADIO & DISPOSITIVO -->
+        <div id="tabSettings" class="tab-screen">
+            <div class="content-scroll">
+                <!-- Radio Settings -->
+                <div class="settings-card">
+                    <div class="settings-card-title">📻 Parametri Radio LoRa (SX1262)</div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Frequenza (MHz)</label>
+                            <input type="number" step="0.001" id="cfgFreq" class="form-control" value="869.618" />
+                        </div>
+                        <div class="form-row">
+                            <label>Bandwidth (kHz)</label>
+                            <select id="cfgBw" class="form-control">
+                                <option value="62.5">62.5 kHz (Default EU)</option>
+                                <option value="125">125 kHz</option>
+                                <option value="250">250 kHz</option>
+                                <option value="500">500 kHz</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Spreading Factor (SF)</label>
+                            <select id="cfgSf" class="form-control">
+                                <option value="7">SF7 (Più veloce)</option>
+                                <option value="8">SF8 (Default)</option>
+                                <option value="9">SF9</option>
+                                <option value="10">SF10</option>
+                                <option value="11">SF11</option>
+                                <option value="12">SF12 (Lungo raggio)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Coding Rate (CR)</label>
+                            <select id="cfgCr" class="form-control">
+                                <option value="5">4/5</option>
+                                <option value="6">4/6</option>
+                                <option value="7">4/7</option>
+                                <option value="8">4/8 (Massima robustezza)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <label>Potenza di Trasmissione (TX Power dBm)</label>
+                        <select id="cfgTxPower" class="form-control">
+                            <option value="14">14 dBm (25 mW)</option>
+                            <option value="17">17 dBm (50 mW)</option>
+                            <option value="20">20 dBm (100 mW - Normale)</option>
+                            <option value="22">22 dBm (160 mW - Massima)</option>
+                        </select>
+                    </div>
+                    <button id="saveRadioBtn" class="btn-action">💾 Applica Parametri Radio</button>
+                </div>
+
+                <!-- Node Identity -->
+                <div class="settings-card">
+                    <div class="settings-card-title">🏷️ Identità Nodo & Beacon Advert</div>
+                    <div class="form-row">
+                        <label>Nome del Nodo</label>
+                        <input type="text" id="cfgNodeName" class="form-control" value="Buscate" />
+                    </div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Latitudine GPS</label>
+                            <input type="number" step="0.00001" id="cfgLat" class="form-control" placeholder="es. 45.526" />
+                        </div>
+                        <div class="form-row">
+                            <label>Longitudine GPS</label>
+                            <input type="number" step="0.00001" id="cfgLon" class="form-control" placeholder="es. 8.814" />
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <button id="saveNodeBtn" class="btn-action" style="flex:1;">💾 Salva Nome & GPS</button>
+                        <button id="sendAdvertBtn" class="btn-action btn-secondary" style="flex:1;">📢 Invia Beacon Ora</button>
+                    </div>
+                </div>
+
+                <!-- Device Maintenance -->
+                <div class="settings-card">
+                    <div class="settings-card-title">🛠️ Strumenti Dispositivo</div>
+                    <p style="font-size:0.8rem; color:var(--text-muted);">
+                        Dispositivo: <b id="cfgDevModel">Heltec V3 (ESP32-S3)</b><br>
+                        Firmware: <b id="cfgDevFw">MeshCore</b>
+                    </p>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                        <button id="syncTimeBtn" class="btn-action btn-secondary" style="flex:1;">⏱️ Sincronizza Ora</button>
+                        <button id="rebootBtn" class="btn-action btn-danger" style="flex:1;">⚠️ Riavvia Heltec</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
-    <!-- Channels Selector Bar -->
-    <div class="channels-bar" id="channelsBar">
-        <span class="ch-label">Canale:</span>
-        <button class="ch-chip active" data-ch="all">🌟 Tutti</button>
-    </div>
+    <!-- Bottom Navigation Bar (4 Native Tabs) -->
+    <nav class="bottom-nav">
+        <button class="nav-item active" data-tab="tabMessages">
+            <span class="nav-icon">💬</span>
+            <span class="nav-label">Messaggi</span>
+        </button>
+        <button class="nav-item" data-tab="tabNodes">
+            <span class="nav-icon">👥</span>
+            <span class="nav-label">Nodi</span>
+        </button>
+        <button class="nav-item" data-tab="tabChannels">
+            <span class="nav-icon">📻</span>
+            <span class="nav-label">Canali</span>
+        </button>
+        <button class="nav-item" data-tab="tabSettings">
+            <span class="nav-icon">⚙️</span>
+            <span class="nav-label">Impostazioni</span>
+        </button>
+    </nav>
 
-    <!-- Main Container -->
-    <div class="main-container">
-        
-        <!-- Chat Section -->
-        <section class="chat-section" id="chatSection">
-            <div class="messages-container" id="messagesContainer">
-                <div class="empty-state" id="loadingState">Connessione in corso al server MeshCore...</div>
-            </div>
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="toast-container"></div>
 
-            <!-- Composer -->
-            <div class="composer">
-                <div class="composer-top">
-                    <input type="text" id="callsignInput" class="input-callsign" placeholder="Tuo Nome" value="Web-Operatore" title="Tuo nominativo o nome operatore">
-                    <select id="channelSelect" class="select-channel" title="Seleziona il canale su cui trasmettere">
-                        <option value="0">[0] Public</option>
-                    </select>
-                </div>
-                <div class="composer-bottom">
-                    <input type="text" id="messageInput" class="input-message" placeholder="Scrivi un messaggio da inviare via radio..." autocomplete="off">
-                    <button id="sendBtn" class="btn-send">
-                        <span>📡</span>
-                        <span>Invia</span>
-                    </button>
-                </div>
-            </div>
-        </section>
-
-        <!-- Sidebar / Telemetry -->
-        <aside class="sidebar" id="sidebarSection">
-            <!-- Station Telemetry -->
-            <div class="sidebar-panel">
-                <div class="sidebar-title">
-                    <span>📻 Stazione Heltec V3</span>
-                    <span id="nodeNameTag" style="color:var(--primary); font-weight:bold;">Buscate</span>
-                </div>
-                <div class="station-grid">
-                    <div class="station-stat">
-                        <div class="stat-label">Frequenza</div>
-                        <div class="stat-value" id="statFreq">869.618 MHz</div>
-                    </div>
-                    <div class="station-stat">
-                        <div class="stat-label">Modulazione</div>
-                        <div class="stat-value" id="statMod">SF8 / BW62.5</div>
-                    </div>
-                    <div class="station-stat">
-                        <div class="stat-label">Pacchetti RX</div>
-                        <div class="stat-value" id="statRx" style="color:#34d399;">0</div>
-                    </div>
-                    <div class="station-stat">
-                        <div class="stat-label">Pacchetti TX</div>
-                        <div class="stat-value" id="statTx" style="color:#38bdf8;">0</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Heard Nodes -->
-            <div class="sidebar-panel" style="flex: 1;">
-                <div class="sidebar-title">
-                    <span>👥 Nodi Ascoltati via Radio</span>
-                    <span id="nodesCountBadge" style="background:#1f293d; padding:2px 7px; border-radius:10px; font-size:0.75rem;">0</span>
-                </div>
-                <div class="node-list" id="nodesList">
-                    <div class="empty-state">In attesa di traffico radio...</div>
-                </div>
-            </div>
-        </aside>
-
-    </div>
-
-    <!-- Client-side Application Script -->
     <script>
         // State
-        let socket = null;
-        let channels = {0: "Public", 1: "Piemonte", 2: "Italia", 3: "Lombardia", 4: "Veneto", 6: "#it-pi"};
-        let currentFilter = "all";
-        let activeSendChannel = 0;
-        let messages = [];
+        let activeTab = "tabMessages";
+        let activeChannelIdx = 0;
+        let channels = { 0: "Public" };
+        let nodeInfo = { name: "Buscate", freq_mhz: 869.618, bw_khz: 62.5, sf: 8, cr: 8, tx_power: 20 };
         let heardNodes = [];
-        let soundEnabled = true;
+        let messages = [];
+        let socket = null;
+        let audioEnabled = true;
+        let audioCtx = null;
         let isHeltecConnected = false;
 
-        // Restore callsign and sound preferences
-        const savedCallsign = localStorage.getItem("meshcore_callsign");
-        if (savedCallsign) {
-            document.getElementById("callsignInput").value = savedCallsign;
-        }
-        document.getElementById("callsignInput").addEventListener("change", (e) => {
-            localStorage.setItem("meshcore_callsign", e.target.value.trim() || "Web-Operatore");
-        });
-
-        const savedSound = localStorage.getItem("meshcore_sound");
-        if (savedSound !== null) {
-            soundEnabled = savedSound === "true";
-            updateSoundIcon();
-        }
-
-        // Web Audio Synthesizer for LoRa packet chime
-        function playChime() {
-            if (!soundEnabled) return;
+        // Sound Synthesizer
+        function playChime(type = "recv") {
+            if (!audioEnabled) return;
             try {
-                const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                if (!AudioCtx) return;
-                const ctx = new AudioCtx();
-                const now = ctx.currentTime;
-                
-                // Tone 1
-                const osc1 = ctx.createOscillator();
-                const gain1 = ctx.createGain();
-                osc1.type = "sine";
-                osc1.frequency.setValueAtTime(880, now);
-                osc1.frequency.exponentialRampToValueAtTime(1320, now + 0.08);
-                gain1.gain.setValueAtTime(0.08, now);
-                gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-                osc1.connect(gain1);
-                gain1.connect(ctx.destination);
-                osc1.start(now);
-                osc1.stop(now + 0.12);
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === "suspended") {
+                    audioCtx.resume();
+                }
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
 
-                // Tone 2
-                const osc2 = ctx.createOscillator();
-                const gain2 = ctx.createGain();
-                osc2.type = "sine";
-                osc2.frequency.setValueAtTime(1760, now + 0.08);
-                gain2.gain.setValueAtTime(0.06, now + 0.08);
-                gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-                osc2.connect(gain2);
-                gain2.connect(ctx.destination);
-                osc2.start(now + 0.08);
-                osc2.stop(now + 0.22);
+                const now = audioCtx.currentTime;
+                if (type === "recv") {
+                    // Two-tone bell for received message
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(587.33, now); // D5
+                    osc.frequency.setValueAtTime(880, now + 0.08); // A5
+                    gain.gain.setValueAtTime(0.12, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                    osc.start(now);
+                    osc.stop(now + 0.35);
+                } else if (type === "ack") {
+                    // Double high chirp for ACK confirmation
+                    osc.type = "triangle";
+                    osc.frequency.setValueAtTime(987.77, now); // B5
+                    osc.frequency.setValueAtTime(1318.51, now + 0.07); // E6
+                    gain.gain.setValueAtTime(0.14, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                    osc.start(now);
+                    osc.stop(now + 0.3);
+                }
             } catch(e) {
-                console.log("Audio play error:", e);
+                console.warn("Audio chime error:", e);
             }
         }
 
-        function updateSoundIcon() {
-            document.getElementById("soundIcon").innerText = soundEnabled ? "🔊" : "🔇";
+        // Toasts
+        function showToast(text, isGood = true) {
+            const container = document.getElementById("toastContainer");
+            const bubble = document.createElement("div");
+            bubble.className = "toast-bubble";
+            bubble.innerHTML = `<span>${isGood ? "✅" : "ℹ️"}</span><span>${escapeHtml(text)}</span>`;
+            container.appendChild(bubble);
+            setTimeout(() => {
+                bubble.style.opacity = "0";
+                bubble.style.transition = "opacity 0.3s ease";
+                setTimeout(() => bubble.remove(), 300);
+            }, 3500);
         }
 
-        document.getElementById("soundToggleBtn").addEventListener("click", () => {
-            soundEnabled = !soundEnabled;
-            localStorage.setItem("meshcore_sound", soundEnabled);
-            updateSoundIcon();
-            if (soundEnabled) playChime();
-        });
+        // Tab Switching
+        document.querySelectorAll(".nav-item").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const targetTab = btn.getAttribute("data-tab");
+                document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+                btn.classList.add("active");
 
-        // Mobile Tabs Switcher
-        const tabChatBtn = document.getElementById("tabChatBtn");
-        const tabNodesBtn = document.getElementById("tabNodesBtn");
-        const chatSection = document.getElementById("chatSection");
-        const sidebarSection = document.getElementById("sidebarSection");
+                document.querySelectorAll(".tab-screen").forEach(s => s.classList.remove("active"));
+                const activeScreen = document.getElementById(targetTab);
+                if (activeScreen) activeScreen.classList.add("active");
+                activeTab = targetTab;
 
-        tabChatBtn.addEventListener("click", () => {
-            tabChatBtn.classList.add("active");
-            tabNodesBtn.classList.remove("active");
-            chatSection.classList.remove("mobile-hidden");
-            sidebarSection.classList.remove("mobile-visible");
-        });
-
-        tabNodesBtn.addEventListener("click", () => {
-            tabNodesBtn.classList.add("active");
-            tabChatBtn.classList.remove("active");
-            chatSection.classList.add("mobile-hidden");
-            sidebarSection.classList.add("mobile-visible");
-        });
-
-        // Channel tabs rendering
-        function renderChannelsBar() {
-            const bar = document.getElementById("channelsBar");
-            const select = document.getElementById("channelSelect");
-            
-            // Retain 'all' chip
-            bar.innerHTML = '<span class="ch-label">Canale:</span>';
-            
-            const allBtn = document.createElement("button");
-            allBtn.className = "ch-chip" + (currentFilter === "all" ? " active" : "");
-            allBtn.innerText = "🌟 Tutti";
-            allBtn.addEventListener("click", () => selectFilter("all"));
-            bar.appendChild(allBtn);
-
-            select.innerHTML = "";
-
-            const sortedKeys = Object.keys(channels).map(Number).sort((a, b) => a - b);
-            sortedKeys.forEach(idx => {
-                const name = channels[idx];
-                
-                // Chip in top bar
-                const chip = document.createElement("button");
-                chip.className = "ch-chip" + (currentFilter === String(idx) ? " active" : "");
-                chip.innerText = `[${idx}] ${name}`;
-                chip.addEventListener("click", () => selectFilter(String(idx)));
-                bar.appendChild(chip);
-
-                // Option in composer select
-                const opt = document.createElement("option");
-                opt.value = idx;
-                opt.innerText = `[${idx}] ${name}`;
-                if (idx === activeSendChannel) opt.selected = true;
-                select.appendChild(opt);
+                if (targetTab === "tabMessages") {
+                    scrollChatToBottom();
+                }
             });
-        }
-
-        function selectFilter(chKey) {
-            currentFilter = chKey;
-            renderChannelsBar();
-            renderMessages();
-            if (chKey !== "all") {
-                activeSendChannel = parseInt(chKey);
-                document.getElementById("channelSelect").value = activeSendChannel;
-            }
-        }
-
-        document.getElementById("channelSelect").addEventListener("change", (e) => {
-            activeSendChannel = parseInt(e.target.value);
         });
 
-        // Messages rendering
-        function renderMessages() {
-            const container = document.getElementById("messagesContainer");
-            const filtered = currentFilter === "all" 
-                ? messages 
-                : messages.filter(m => {
-                    const targetName = channels[parseInt(currentFilter)];
-                    return m.channel === targetName || String(m.channel_idx) === String(currentFilter);
+        // Audio Toggle
+        const audioBtn = document.getElementById("audioToggleBtn");
+        audioBtn.addEventListener("click", () => {
+            audioEnabled = !audioEnabled;
+            audioBtn.textContent = audioEnabled ? "🔔" : "🔕";
+            showToast(audioEnabled ? "Notifiche audio attivate" : "Notifiche audio disattivate", audioEnabled);
+        });
+
+        // Update Top Header Display
+        function updateHeader() {
+            const badge = document.getElementById("connBadge");
+            const badgeText = document.getElementById("connBadgeText");
+            if (isHeltecConnected) {
+                badge.className = "status-badge online";
+                badgeText.textContent = "CONNESSA";
+            } else {
+                badge.className = "status-badge offline";
+                badgeText.textContent = "OFFLINE";
+            }
+            document.getElementById("nodeNameDisplay").textContent = nodeInfo.name || "Buscate";
+            document.getElementById("radioFreqDisplay").textContent = (nodeInfo.freq_mhz || 869.618) + " MHz";
+        }
+
+        // Render Channel Chips
+        function renderChannelsBar() {
+            const bar = document.getElementById("channelsNavBar");
+            bar.innerHTML = "";
+            const keys = Object.keys(channels).map(Number).sort((a,b) => a - b);
+            keys.forEach(idx => {
+                const name = channels[idx];
+                const chip = document.createElement("button");
+                chip.className = `channel-chip ${idx === activeChannelIdx ? "active" : ""}`;
+                chip.textContent = `[${idx}] ${name}`;
+                chip.addEventListener("click", () => {
+                    activeChannelIdx = idx;
+                    document.getElementById("currentChannelName").textContent = `${name} [${idx}]`;
+                    renderChannelsBar();
+                    renderMessages();
                 });
+                bar.appendChild(chip);
+            });
+            document.getElementById("currentChannelName").textContent = `${channels[activeChannelIdx] || "Canale"} [${activeChannelIdx}]`;
+        }
+
+        // Render Messages List
+        function renderMessages() {
+            const container = document.getElementById("chatMessagesScroll");
+            container.innerHTML = `<div class="chat-date-separator"><span>Oggi • Canale [${activeChannelIdx}] ${channels[activeChannelIdx] || ""}</span></div>`;
+
+            const filtered = messages.filter(m => {
+                if (m.channel_idx !== undefined && m.channel_idx !== null) {
+                    return Number(m.channel_idx) === Number(activeChannelIdx);
+                }
+                const chName = channels[activeChannelIdx];
+                return m.channel === chName || m.channel === `Canale ${activeChannelIdx}` || m.channel === `Canale #${activeChannelIdx}`;
+            });
 
             if (filtered.length === 0) {
-                container.innerHTML = '<div class="empty-state">Nessun messaggio in questo canale al momento.</div>';
+                const empty = document.createElement("div");
+                empty.style.cssText = "text-align: center; color: var(--text-dim); margin-top: 40px; font-size: 0.85rem;";
+                empty.innerHTML = `Nessun messaggio su questo canale.<br>Invia un messaggio per trasmettere via radio LoRa.`;
+                container.appendChild(empty);
                 return;
             }
 
-            container.innerHTML = "";
             filtered.forEach(m => {
+                const isOut = m.source === "Web Client" || m.source === "Web API";
+                const wrap = document.createElement("div");
+                wrap.className = `msg-bubble-wrap ${isOut ? "outgoing" : "incoming"}`;
+
+                // Sender Header
+                const senderDiv = document.createElement("div");
+                senderDiv.className = "msg-sender-name";
+                senderDiv.textContent = m.sender || (isOut ? "Tu" : "Nodo Radio");
+                wrap.appendChild(senderDiv);
+
+                // Bubble Body
                 const bubble = document.createElement("div");
-                let sourceClass = "from-lora";
-                let sourceIcon = "📡 LoRa";
-                if (m.source === "Telegram") {
-                    sourceClass = "from-telegram";
-                    sourceIcon = "✈️ Telegram";
-                } else if (m.source === "Web Client" || m.source === "Web API") {
-                    sourceClass = "from-web";
-                    sourceIcon = "🌐 Web";
-                }
+                bubble.className = "msg-bubble";
+                bubble.textContent = m.content;
+                wrap.appendChild(bubble);
 
-                bubble.className = `message-bubble ${sourceClass}`;
+                // Footer (Time, Signal/Hops, ACK)
+                const footer = document.createElement("div");
+                footer.className = "msg-footer";
 
-                // Header
-                const timeStr = m.timestamp ? (m.timestamp.length > 16 ? m.timestamp.substring(11, 19) : m.timestamp) : "";
-                let headerHtml = `
-                    <div class="msg-header">
-                        <span class="msg-sender">${escapeHtml(m.sender || "Nodo Radio")}</span>
-                        <span class="msg-ch-tag">[${escapeHtml(m.channel || "Public")}]</span>
-                        <span class="msg-source-tag">${sourceIcon}</span>
-                        <span class="msg-time">${timeStr}</span>
-                    </div>
-                `;
+                const timeStr = m.timestamp ? m.timestamp.substring(11, 16) : "";
+                let details = `<span>${timeStr}</span>`;
 
-                // Content
-                const contentHtml = `<div class="msg-body">${escapeHtml(m.content || "")}</div>`;
-
-                // Footer (metrics & GPS)
-                let footerHtml = "";
-                let metricsParts = [];
                 if (m.snr !== undefined && m.snr !== null) {
-                    const snrVal = parseFloat(m.snr);
-                    let snrClass = "poor";
-                    let snrRating = "Debole";
-                    if (snrVal >= 5) { snrClass = "good"; snrRating = "Ottimo"; }
-                    else if (snrVal >= 0) { snrClass = "fair"; snrRating = "Buono"; }
-                    metricsParts.push(`<span class="signal-pill ${snrClass}">📡 SNR: ${snrVal >= 0 ? "+" : ""}${snrVal.toFixed(1)} dB (${snrRating})</span>`);
+                    details += `<span>• SNR: ${m.snr > 0 ? '+' : ''}${Number(m.snr).toFixed(1)}dB</span>`;
                 }
                 if (m.hops !== undefined && m.hops !== null) {
-                    const hopsVal = parseInt(m.hops);
-                    const hopsStr = (hopsVal === 0 || hopsVal === 255) ? "Diretto (0 salti)" : `${hopsVal} ${hopsVal === 1 ? "salto" : "salti"}`;
-                    metricsParts.push(`<span>🔗 ${hopsStr}</span>`);
+                    const hopsLabel = m.hops === 0 ? "Diretto" : `${m.hops} salti`;
+                    details += `<span>• ${hopsLabel}</span>`;
                 }
-                if (m.lat && m.lon) {
-                    metricsParts.push(`<a href="https://www.openstreetmap.org/?mlat=${m.lat}&mlon=${m.lon}#map=14/${m.lat}/${m.lon}" target="_blank" class="map-btn">📍 Mappa (${m.lat.toFixed(4)}, ${m.lon.toFixed(4)})</a>`);
-                }
-                if (m.sent_to_radio !== undefined && m.sent_to_radio !== null) {
-                    if (m.sent_to_radio === true) {
-                        metricsParts.push(`<span class="signal-pill good" title="Confermato: Trasmesso via radio LoRa dall'antenna">✓✓ Trasmesso via LoRa</span>`);
+
+                if (isOut) {
+                    const status = m.ack_status || (m.sent_to_radio ? "sent_to_radio" : "pending");
+                    if (status === "confirmed") {
+                        const rtt = m.rtt_ms ? ` (${m.rtt_ms}ms)` : "";
+                        details += `<span class="ack-indicator confirmed">✓✓ Ricevuto da nodo${rtt}</span>`;
+                    } else if (status === "air" || status === "sent_to_radio") {
+                        details += `<span class="ack-indicator air">✓ Trasmesso in etere</span>`;
                     } else {
-                        metricsParts.push(`<span class="signal-pill poor" title="Heltec offline: salvato solo nella room">⚠️ Non irradiato (Heltec offline)</span>`);
+                        details += `<span class="ack-indicator pending">⏳ In invio...</span>`;
                     }
                 }
 
-                if (metricsParts.length > 0) {
-                    footerHtml = `<div class="msg-footer">${metricsParts.join(" &nbsp;•&nbsp; ")}</div>`;
-                }
-
-                bubble.innerHTML = headerHtml + contentHtml + footerHtml;
-                container.appendChild(bubble);
+                footer.innerHTML = details;
+                wrap.appendChild(footer);
+                container.appendChild(wrap);
             });
 
-            // Scroll to bottom
+            scrollChatToBottom();
+        }
+
+        function scrollChatToBottom() {
+            const container = document.getElementById("chatMessagesScroll");
             container.scrollTop = container.scrollHeight;
         }
 
-        // Heard Nodes rendering
-        function renderHeardNodes() {
-            const list = document.getElementById("nodesList");
-            const badge = document.getElementById("nodesCountBadge");
-            badge.innerText = heardNodes.length;
+        // Render Nodes Tab
+        function renderNodes() {
+            const container = document.getElementById("nodesListContainer");
+            container.innerHTML = "";
+            document.getElementById("nodesCount").textContent = heardNodes.length;
 
             if (heardNodes.length === 0) {
-                list.innerHTML = '<div class="empty-state">In attesa di traffico radio...</div>';
+                container.innerHTML = `<div style="text-align:center; color:var(--text-dim); padding:30px;">Nessun nodo radio ascoltato finora.<br>I nodi compariranno automaticamente non appena trasmetteranno pacchetti o beacon.</div>`;
                 return;
             }
 
-            list.innerHTML = "";
             heardNodes.forEach(n => {
                 const card = document.createElement("div");
                 card.className = "node-card";
-                
-                const timeAgo = formatTimeAgo(n.last_seen);
-                let snrBadge = "";
-                if (n.last_snr !== null && n.last_snr !== undefined) {
-                    const s = parseFloat(n.last_snr);
-                    snrBadge = `SNR ${s >= 0 ? "+" : ""}${s.toFixed(1)}dB`;
-                }
 
-                let mapLink = "";
-                if (n.lat && n.lon) {
-                    mapLink = `• <a href="https://www.openstreetmap.org/?mlat=${n.lat}&mlon=${n.lon}#map=14/${n.lat}/${n.lon}" target="_blank" class="map-btn" style="font-size:0.72rem;">📍 Mappa</a>`;
-                }
+                const icon = n.lat && n.lon ? "📍" : "📻";
+                const snrText = n.last_snr !== null && n.last_snr !== undefined ? `SNR: ${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)}dB` : "";
+                const hopsText = n.last_hops !== undefined && n.last_hops !== null ? (n.last_hops === 0 ? "0 salti (diretto)" : `${n.last_hops} salti`) : "";
+                const timeText = n.last_seen ? n.last_seen.substring(11, 16) : "";
 
                 card.innerHTML = `
-                    <div class="node-card-top">
-                        <span class="node-name">${escapeHtml(n.node_name)}</span>
-                        <span class="node-packets">${n.packets_count || 1} pkt</span>
+                    <div class="node-avatar">${icon}</div>
+                    <div class="node-info-col">
+                        <div class="node-name-text">${escapeHtml(n.node_name)}</div>
+                        <div class="node-sub-text">
+                            <span>⏱️ ${timeText}</span>
+                            ${hopsText ? `<span>• ${hopsText}</span>` : ''}
+                            ${snrText ? `<span>• ${snrText}</span>` : ''}
+                        </div>
                     </div>
-                    <div class="node-card-meta">
-                        <span>⏱️ ${timeAgo}</span>
-                        <span>📻 ${escapeHtml(n.last_channel || "LoRa")}</span>
-                        ${snrBadge ? `<span>${snrBadge}</span>` : ""}
-                        ${mapLink}
+                    <div class="node-actions-col">
+                        <span class="node-badge">${escapeHtml(n.last_channel || 'Radio')}</span>
+                        ${n.lat && n.lon ? `<a href="https://www.openstreetmap.org/?mlat=${n.lat}&mlon=${n.lon}#map=14/${n.lat}/${n.lon}" target="_blank" class="btn-icon" style="padding:3px 8px; font-size:0.7rem;">Mappa</a>` : ''}
                     </div>
                 `;
-                list.appendChild(card);
+                container.appendChild(card);
             });
         }
 
-        function updateStationInfo(info, stats, heltecConnected) {
-            const badge = document.getElementById("boardStatusBadge");
-            const text = document.getElementById("boardStatusText");
+        // Render Channels Tab
+        function renderChannelsSettings() {
+            const container = document.getElementById("channelsListContainer");
+            container.innerHTML = "";
+            const keys = Object.keys(channels).map(Number).sort((a,b) => a - b);
+            keys.forEach(idx => {
+                const name = channels[idx];
+                const card = document.createElement("div");
+                card.className = "channel-card";
+                card.innerHTML = `
+                    <div class="channel-card-top">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="channel-slot-badge">Slot #${idx}</span>
+                            <b style="font-size:0.95rem;">${escapeHtml(name)}</b>
+                        </div>
+                        <button class="btn-icon" onclick="selectAndChat(${idx})">💬 Apri Chat</button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
 
-            if (heltecConnected !== undefined && heltecConnected !== null) {
-                isHeltecConnected = !!heltecConnected;
-            }
+        window.selectAndChat = function(idx) {
+            activeChannelIdx = idx;
+            renderChannelsBar();
+            renderMessages();
+            document.querySelector('[data-tab="tabMessages"]').click();
+        };
 
-            if (heltecConnected) {
-                badge.className = "badge-status online";
-                text.innerText = "Heltec Online";
-            } else {
-                badge.className = "badge-status offline";
-                text.innerText = "Heltec Offline";
-            }
-
-            if (info) {
-                if (info.name) document.getElementById("nodeNameTag").innerText = info.name;
-                if (info.freq_mhz) document.getElementById("statFreq").innerText = `${info.freq_mhz.toFixed(3)} MHz`;
-                if (info.sf && info.bw_khz) {
-                    document.getElementById("statMod").innerText = `SF${info.sf} / BW${info.bw_khz}`;
-                }
-            }
-
-            if (stats) {
-                document.getElementById("statRx").innerText = stats.packets_rx || 0;
-                document.getElementById("statTx").innerText = stats.packets_tx || 0;
-            }
+        // Populate Settings Inputs
+        function populateSettingsInputs() {
+            if (nodeInfo.freq_mhz) document.getElementById("cfgFreq").value = nodeInfo.freq_mhz;
+            if (nodeInfo.bw_khz) document.getElementById("cfgBw").value = String(nodeInfo.bw_khz);
+            if (nodeInfo.sf) document.getElementById("cfgSf").value = String(nodeInfo.sf);
+            if (nodeInfo.cr) document.getElementById("cfgCr").value = String(nodeInfo.cr);
+            if (nodeInfo.tx_power) document.getElementById("cfgTxPower").value = String(nodeInfo.tx_power);
+            if (nodeInfo.name) document.getElementById("cfgNodeName").value = nodeInfo.name;
+            if (nodeInfo.lat) document.getElementById("cfgLat").value = nodeInfo.lat;
+            if (nodeInfo.lon) document.getElementById("cfgLon").value = nodeInfo.lon;
+            if (nodeInfo.model) document.getElementById("cfgDevModel").textContent = nodeInfo.model;
+            if (nodeInfo.firmware) document.getElementById("cfgDevFw").textContent = nodeInfo.firmware;
         }
 
         // WebSocket Connection
         function connectWebSocket() {
-            const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-            const wsUrl = `${protocol}//${window.location.host}/ws/client`;
-            console.log("Connecting WebSocket:", wsUrl);
-
+            const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+            const wsUrl = `${protocol}//${location.host}/ws/client`;
             socket = new WebSocket(wsUrl);
 
             socket.onopen = () => {
-                console.log("WebSocket connected to MeshCore bridge.");
-                document.getElementById("loadingState")?.remove();
+                console.log("WebSocket client connected");
             };
 
             socket.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    handleIncomingEvent(data);
+                    handleSocketMessage(data);
                 } catch(e) {
-                    console.error("Error parsing WebSocket JSON:", e);
+                    console.error("Socket parse error:", e);
                 }
             };
 
             socket.onclose = () => {
-                console.log("WebSocket closed. Reconnecting in 3s...");
+                console.warn("WebSocket client disconnected, reconnecting in 3s...");
+                isHeltecConnected = false;
+                updateHeader();
                 setTimeout(connectWebSocket, 3000);
             };
 
             socket.onerror = (err) => {
                 console.error("WebSocket error:", err);
-                socket.close();
             };
         }
 
-        function handleIncomingEvent(data) {
-            console.log("Event received:", data.type);
-
+        function handleSocketMessage(data) {
             if (data.type === "init") {
+                isHeltecConnected = data.heltec_connected;
                 if (data.channels) channels = data.channels;
+                if (data.node_info) nodeInfo = Object.assign(nodeInfo, data.node_info);
                 if (data.recent_messages) messages = data.recent_messages;
                 if (data.recent_nodes) heardNodes = data.recent_nodes;
+                updateHeader();
                 renderChannelsBar();
                 renderMessages();
-                renderHeardNodes();
-                updateStationInfo(data.node_info, data.stats, data.heltec_connected);
-            } 
-            else if (data.type === "new_message") {
-                messages.push(data);
-                renderMessages();
-                if (data.source === "LoRa Mesh") {
-                    playChime();
-                }
-            }
-            else if (data.type === "channels") {
+                renderNodes();
+                renderChannelsSettings();
+                populateSettingsInputs();
+            } else if (data.type === "status") {
+                isHeltecConnected = data.heltec_connected;
+                if (data.channels) channels = data.channels;
+                if (data.node_info) nodeInfo = Object.assign(nodeInfo, data.node_info);
+                updateHeader();
+                populateSettingsInputs();
+            } else if (data.type === "channels") {
                 channels = data.channels;
                 renderChannelsBar();
-            }
-            else if (data.type === "nodes") {
-                heardNodes = data.nodes;
-                renderHeardNodes();
-            }
-            else if (data.type === "status") {
-                if (data.channels) channels = data.channels;
-                updateStationInfo(data.node_info, data.stats, data.heltec_connected);
-            }
-            else if (data.type === "node_info") {
-                updateStationInfo(data.node_info, null, true);
-            }
-        }
-
-        function showToast(msg, isSuccess) {
-            let toast = document.getElementById("toastNotification");
-            if (!toast) {
-                toast = document.createElement("div");
-                toast.id = "toastNotification";
-                toast.style.position = "fixed";
-                toast.style.bottom = "84px";
-                toast.style.left = "50%";
-                toast.style.transform = "translateX(-50%)";
-                toast.style.padding = "10px 18px";
-                toast.style.borderRadius = "10px";
-                toast.style.fontSize = "0.86rem";
-                toast.style.fontWeight = "600";
-                toast.style.zIndex = "999";
-                toast.style.transition = "all 0.25s ease";
-                toast.style.boxShadow = "0 6px 18px rgba(0,0,0,0.5)";
-                toast.style.maxWidth = "90%";
-                toast.style.textAlign = "center";
-                document.body.appendChild(toast);
-            }
-            toast.style.background = isSuccess ? "#059669" : "#d97706";
-            toast.style.color = "#ffffff";
-            toast.innerText = msg;
-            toast.style.opacity = "1";
-            toast.style.pointerEvents = "auto";
-            setTimeout(() => { 
-                if (toast) {
-                    toast.style.opacity = "0"; 
-                    toast.style.pointerEvents = "none";
+                renderChannelsSettings();
+            } else if (data.type === "node_info") {
+                nodeInfo = Object.assign(nodeInfo, data.node_info);
+                updateHeader();
+                populateSettingsInputs();
+            } else if (data.type === "new_message") {
+                messages.push(data);
+                if (messages.length > 150) messages.shift();
+                renderMessages();
+                if (data.source === "LoRa Mesh") {
+                    playChime("recv");
+                    showToast(`Nuovo messaggio LoRa su [${data.channel}]: ${data.content.substring(0, 40)}`, true);
                 }
-            }, 3800);
+            } else if (data.type === "message_in_flight") {
+                // Sent to radio, in the air
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i].source === "Web Client" && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio")) {
+                        messages[i].ack_status = "air";
+                        break;
+                    }
+                }
+                renderMessages();
+            } else if (data.type === "message_ack") {
+                // Confirmed delivery ACK by remote node
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i].source === "Web Client" || messages[i].source === "Web API") {
+                        messages[i].ack_status = "confirmed";
+                        messages[i].rtt_ms = data.round_trip_ms;
+                        break;
+                    }
+                }
+                renderMessages();
+                playChime("ack");
+                const rttStr = data.round_trip_ms ? ` in ${data.round_trip_ms}ms` : "";
+                showToast(`✅ Ricezione confermata da nodo mesh${rttStr}!`, true);
+            } else if (data.type === "nodes") {
+                heardNodes = data.nodes;
+                renderNodes();
+            } else if (data.type === "action_result") {
+                if (data.success) {
+                    showToast(`Operazione '${data.action}' completata con successo!`, true);
+                } else {
+                    showToast(`Operazione '${data.action}' non riuscita.`, false);
+                }
+            }
         }
 
         // Send Message
         async function sendMessage() {
             const input = document.getElementById("messageInput");
-            const callsignInput = document.getElementById("callsignInput");
             const text = input.value.trim();
-            const sender = callsignInput.value.trim() || "Web-Operatore";
-            const channelIdx = parseInt(document.getElementById("channelSelect").value || 0);
-
             if (!text) return;
 
-            const payload = {
-                action: "send_message",
-                channel_idx: channelIdx,
-                text: text,
-                sender: sender
-            };
+            const sender = document.getElementById("senderNameInput").value.trim() || "Web-Operatore";
+            const btn = document.getElementById("sendBtn");
+            btn.disabled = true;
 
-            const sendBtn = document.getElementById("sendBtn");
-            sendBtn.disabled = true;
+            const clientMsgId = "msg_" + Date.now();
 
-            let sentSuccess = false;
-
-            // Try via WebSocket first
             if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify(payload));
-                sentSuccess = true;
+                socket.send(JSON.stringify({
+                    action: "send_message",
+                    channel_idx: activeChannelIdx,
+                    text: text,
+                    sender: sender,
+                    client_id: clientMsgId
+                }));
+                input.value = "";
+                input.focus();
+                btn.disabled = false;
+                showToast("📡 Inviato! La Heltec sta trasmettendo il pacchetto via LoRa.", true);
             } else {
                 // Fallback to REST API
                 try {
                     const resp = await fetch("/api/send", {
                         method: "POST",
-                        headers: {"Content-Type": "application/json"},
+                        headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
-                            channel_idx: channelIdx,
+                            channel_idx: activeChannelIdx,
                             text: text,
                             sender: sender
                         })
                     });
-                    if (resp.ok) sentSuccess = true;
+                    if (resp.ok) {
+                        input.value = "";
+                        input.focus();
+                        showToast("📡 Inviato tramite REST API.", true);
+                    } else {
+                        showToast("❌ Errore invio messaggio.", false);
+                    }
                 } catch(e) {
-                    console.error("REST send error:", e);
+                    showToast("❌ Errore di connessione.", false);
                 }
-            }
-
-            sendBtn.disabled = false;
-            if (sentSuccess) {
-                input.value = "";
-                input.focus();
-                if (isHeltecConnected) {
-                    showToast("📡 Inviato! La Heltec sta trasmettendo il pacchetto via LoRa.", true);
-                } else {
-                    showToast("💾 Salvato nel server. (Heltec offline, non irradiato via radio).", false);
-                }
-            } else {
-                showToast("❌ Errore invio: Impossibile contattare il server MeshCore.", false);
+                btn.disabled = false;
             }
         }
 
@@ -1176,22 +1402,120 @@ def get_web_client_html() -> str:
             }
         });
 
+        // Settings Buttons
+        document.getElementById("saveRadioBtn").addEventListener("click", () => {
+            const freq = parseFloat(document.getElementById("cfgFreq").value);
+            const bw = parseFloat(document.getElementById("cfgBw").value);
+            const sf = parseInt(document.getElementById("cfgSf").value);
+            const cr = parseInt(document.getElementById("cfgCr").value);
+            const tx = parseInt(document.getElementById("cfgTxPower").value);
+
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({
+                    action: "set_radio_params",
+                    freq_mhz: freq,
+                    bw_khz: bw,
+                    sf: sf,
+                    cr: cr
+                }));
+                socket.send(JSON.stringify({
+                    action: "set_radio_tx_power",
+                    tx_power: tx
+                }));
+            } else {
+                fetch("/api/settings/radio", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ freq_mhz: freq, bw_khz: bw, sf: sf, cr: cr, tx_power: tx })
+                });
+            }
+            showToast("Parametri inviati alla scheda Heltec...", true);
+        });
+
+        document.getElementById("saveNodeBtn").addEventListener("click", () => {
+            const name = document.getElementById("cfgNodeName").value.trim();
+            const lat = parseFloat(document.getElementById("cfgLat").value) || null;
+            const lon = parseFloat(document.getElementById("cfgLon").value) || null;
+
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                if (name) socket.send(JSON.stringify({ action: "set_advert_name", name: name }));
+                if (lat && lon) socket.send(JSON.stringify({ action: "set_advert_latlon", lat: lat, lon: lon }));
+            } else {
+                fetch("/api/settings/node", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: name, lat: lat, lon: lon })
+                });
+            }
+            showToast("Nome e posizione inviati alla scheda...", true);
+        });
+
+        document.getElementById("sendAdvertBtn").addEventListener("click", () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ action: "send_self_advert" }));
+            } else {
+                fetch("/api/advert/send", { method: "POST" });
+            }
+            showToast("Beacon Advert trasmesso in flood!", true);
+        });
+
+        document.getElementById("syncTimeBtn").addEventListener("click", () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ action: "sync_time" }));
+                showToast("Orologio sincronizzato con successo.", true);
+            }
+        });
+
+        document.getElementById("rebootBtn").addEventListener("click", () => {
+            if (confirm("Vuoi davvero riavviare la scheda Heltec V3 da remoto?")) {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ action: "reboot" }));
+                } else {
+                    fetch("/api/reboot", { method: "POST" });
+                }
+                showToast("Comando di riavvio inviato!", false);
+            }
+        });
+
+        // Save Channel Button
+        document.getElementById("saveChannelBtn").addEventListener("click", () => {
+            const idx = parseInt(document.getElementById("newChannelIdx").value);
+            const name = document.getElementById("newChannelName").value.trim();
+            const psk = document.getElementById("newChannelPsk").value.trim();
+            if (!name) {
+                showToast("Inserisci un nome valido per il canale.", false);
+                return;
+            }
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({
+                    action: "set_channel",
+                    channel_idx: idx,
+                    name: name,
+                    psk: psk
+                }));
+            }
+            showToast(`Canale [${idx}] ${name} salvato!`, true);
+        });
+
         document.getElementById("refreshChannelsBtn").addEventListener("click", () => {
             if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({action: "refresh_channels"}));
+                socket.send(JSON.stringify({ action: "refresh_channels" }));
+                showToast("Interrogazione canali in corso...", true);
             }
-            fetch("/api/status").then(r => r.json()).then(d => {
-                if (d.discovered_channels) {
-                    channels = d.discovered_channels;
-                    renderChannelsBar();
-                }
+        });
+
+        document.getElementById("refreshNodesBtn").addEventListener("click", () => {
+            fetch("/api/nodes").then(r => r.json()).then(nodes => {
+                heardNodes = nodes;
+                renderNodes();
+                showToast("Lista nodi aggiornata.", true);
             });
         });
 
         // Helpers
         function escapeHtml(str) {
             if (!str) return "";
-            return str
+            return String(str)
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
@@ -1199,26 +1523,14 @@ def get_web_client_html() -> str:
                 .replace(/'/g, "&#039;");
         }
 
-        function formatTimeAgo(timeStr) {
-            if (!timeStr) return "N/A";
-            try {
-                if (timeStr.length >= 16) {
-                    return timeStr.substring(11, 16);
-                }
-                return timeStr;
-            } catch(e) {
-                return timeStr;
-            }
-        }
-
-        // Keep-alive WebSocket Ping
+        // Keepalive
         setInterval(() => {
             if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({action: "ping"}));
+                socket.send(JSON.stringify({ action: "ping" }));
             }
         }, 25000);
 
-        // Start
+        // Init
         renderChannelsBar();
         connectWebSocket();
     </script>

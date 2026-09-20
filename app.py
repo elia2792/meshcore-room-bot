@@ -61,10 +61,14 @@ default_channel_idx: int = 0
 node_info: Dict[str, Any] = {
     "name": "Buscate",
     "firmware": "MeshCore",
+    "model": "Heltec V3",
     "freq_mhz": 869.618,
     "bw_khz": 62.5,
     "sf": 8,
     "cr": 8,
+    "tx_power": 20,
+    "lat": None,
+    "lon": None,
     "max_channels": 40
 }
 
@@ -80,9 +84,20 @@ def init_db():
             channel TEXT,
             content TEXT,
             snr REAL,
-            hops INTEGER
+            hops INTEGER,
+            ack_status TEXT DEFAULT 'pending',
+            rtt_ms INTEGER DEFAULT NULL
         )
     ''')
+    # Migrate columns if existing db lacks ack_status
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN ack_status TEXT DEFAULT 'pending'")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN rtt_ms INTEGER DEFAULT NULL")
+    except Exception:
+        pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
             chat_id TEXT PRIMARY KEY,
@@ -228,18 +243,34 @@ def get_topic_binding(chat_id: str, lora_channel_idx: int) -> Optional[int]:
         print("DB get_topic_binding error:", e)
         return None
 
-def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None):
+def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None) -> int:
+    msg_id = 0
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO messages (source, sender, channel, content, snr, hops) VALUES (?, ?, ?, ?, ?, ?)",
-            (source, sender, channel, content, snr, hops)
+            "INSERT INTO messages (source, sender, channel, content, snr, hops, ack_status, rtt_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (source, sender, channel, content, snr, hops, ack_status, rtt_ms)
         )
+        msg_id = cursor.lastrowid
         conn.commit()
         conn.close()
     except Exception as e:
         print("DB save_message error:", e)
+    return msg_id
+
+def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        if rtt_ms is not None:
+            cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ? WHERE id = ?", (ack_status, rtt_ms, msg_id))
+        else:
+            cursor.execute("UPDATE messages SET ack_status = ? WHERE id = ?", (ack_status, msg_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("DB update_message_ack error:", e)
 
 def get_recent_messages(limit: int = 15, channel: Optional[str] = None) -> List[dict]:
     try:
@@ -248,12 +279,12 @@ def get_recent_messages(limit: int = 15, channel: Optional[str] = None) -> List[
         cursor = conn.cursor()
         if channel:
             cursor.execute(
-                "SELECT id, timestamp, source, sender, channel, content, snr, hops FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
                 (channel, limit)
             )
         else:
             cursor.execute(
-                "SELECT id, timestamp, source, sender, channel, content, snr, hops FROM messages ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms FROM messages ORDER BY id DESC LIMIT ?",
                 (limit,)
             )
         rows = cursor.fetchall()
@@ -362,6 +393,50 @@ def build_device_query_frame() -> bytes:
 
 def build_sync_next_msg_frame() -> bytes:
     payload = bytes([10])
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_radio_params_frame(freq_mhz: float, bw_khz: float, sf: int, cr: int) -> bytes:
+    freq_khz_x1000 = int(round(freq_mhz * 1000.0 * 1000.0))
+    bw_hz = int(round(bw_khz * 1000.0))
+    payload = bytes([11]) + struct.pack("<I", freq_khz_x1000) + struct.pack("<I", bw_hz) + bytes([int(sf), int(cr)])
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_tx_power_frame(tx_power_dbm: int) -> bytes:
+    payload = bytes([12, int(tx_power_dbm)])
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_advert_name_frame(name: str) -> bytes:
+    name_bytes = name.encode("utf-8")[:31] + b"\x00"
+    payload = bytes([8]) + name_bytes
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_advert_latlon_frame(lat: float, lon: float) -> bytes:
+    lat_i = int(round(lat * 1000000.0))
+    lon_i = int(round(lon * 1000000.0))
+    payload = bytes([14]) + struct.pack("<i", lat_i) + struct.pack("<i", lon_i)
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_channel_frame(channel_idx: int, channel_name: str, psk_bytes: bytes = None) -> bytes:
+    name_buf = channel_name.encode("utf-8")[:31].ljust(32, b"\x00")
+    if psk_bytes is None or len(psk_bytes) != 16:
+        # Default Public PSK
+        psk_bytes = bytes([0x8b, 0x33, 0x47, 0x11, 0x1d, 0x60, 0x14, 0x67, 0x96, 0x64, 0x7c, 0xa5, 0x77, 0x05, 0x5b, 0x78])
+    payload = bytes([32, int(channel_idx)]) + name_buf + psk_bytes
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_send_self_advert_frame(flood: bool = True) -> bytes:
+    adv_type = 1 if flood else 0
+    payload = bytes([7, adv_type])
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_reboot_frame() -> bytes:
+    payload = bytes([19]) + b"reboot"
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_device_time_frame(epoch_secs: Optional[int] = None) -> bytes:
+    if epoch_secs is None:
+        epoch_secs = int(time.time())
+    payload = bytes([6]) + struct.pack("<I", epoch_secs)
     return b"<" + struct.pack("<H", len(payload)) + payload
 
 async def query_all_heltec_channels():
@@ -571,9 +646,10 @@ async def websocket_client_endpoint(websocket: WebSocket):
                 ch_idx = int(data.get("channel_idx", 0))
                 text = str(data.get("text", "")).strip()
                 sender = str(data.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
+                client_id = data.get("client_id")
                 if text:
                     ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
-                    save_message("Web Client", sender, ch_name, text)
+                    msg_id = save_message("Web Client", sender, ch_name, text, ack_status="sent_to_radio", rtt_ms=None)
                     frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
                     sent = await send_to_heltec(frame)
 
@@ -582,6 +658,8 @@ async def websocket_client_endpoint(websocket: WebSocket):
 
                     await broadcast_to_browsers({
                         "type": "new_message",
+                        "id": msg_id,
+                        "client_id": client_id,
                         "source": "Web Client",
                         "sender": sender,
                         "channel": ch_name,
@@ -590,11 +668,94 @@ async def websocket_client_endpoint(websocket: WebSocket):
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "snr": None,
                         "hops": 0,
-                        "sent_to_radio": sent
+                        "sent_to_radio": sent,
+                        "ack_status": "sent_to_radio" if sent else "queued",
+                        "rtt_ms": None
                     })
             elif action == "refresh_channels":
                 if active_heltec_ws:
                     await query_all_heltec_channels()
+                    await websocket.send_json({"type": "channels", "channels": discovered_channels})
+            elif action == "set_radio_params":
+                freq = float(data.get("freq_mhz", node_info.get("freq_mhz", 869.618)))
+                bw = float(data.get("bw_khz", node_info.get("bw_khz", 62.5)))
+                sf = int(data.get("sf", node_info.get("sf", 8)))
+                cr = int(data.get("cr", node_info.get("cr", 8)))
+                frame = build_set_radio_params_frame(freq, bw, sf, cr)
+                sent = await send_to_heltec(frame)
+                if sent:
+                    node_info["freq_mhz"] = freq
+                    node_info["bw_khz"] = bw
+                    node_info["sf"] = sf
+                    node_info["cr"] = cr
+                    await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                    await broadcast_telegram(f"⚙️ <b>Parametri Radio aggiornati:</b>\n{freq} MHz | BW {bw} kHz | SF{sf} CR{cr}")
+                await websocket.send_json({"type": "action_result", "action": "set_radio_params", "success": sent})
+            elif action == "set_radio_tx_power":
+                tx_pwr = int(data.get("tx_power", 20))
+                frame = build_set_tx_power_frame(tx_pwr)
+                sent = await send_to_heltec(frame)
+                if sent:
+                    node_info["tx_power"] = tx_pwr
+                    await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                    await broadcast_telegram(f"⚡ <b>Potenza TX aggiornata:</b> {tx_pwr} dBm")
+                await websocket.send_json({"type": "action_result", "action": "set_radio_tx_power", "success": sent})
+            elif action == "set_advert_name":
+                new_name = str(data.get("name", "")).strip()
+                if new_name:
+                    frame = build_set_advert_name_frame(new_name)
+                    sent = await send_to_heltec(frame)
+                    if sent:
+                        node_info["name"] = new_name
+                        await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                        await broadcast_telegram(f"🏷️ <b>Nome nodo aggiornato:</b> <b>{new_name}</b>")
+                    await websocket.send_json({"type": "action_result", "action": "set_advert_name", "success": sent})
+            elif action == "set_advert_latlon":
+                try:
+                    lat = float(data.get("lat", 0.0))
+                    lon = float(data.get("lon", 0.0))
+                    frame = build_set_advert_latlon_frame(lat, lon)
+                    sent = await send_to_heltec(frame)
+                    if sent:
+                        node_info["lat"] = lat
+                        node_info["lon"] = lon
+                        await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                        await broadcast_telegram(f"📍 <b>Posizione GPS nodo aggiornata:</b> ({lat:.5f}, {lon:.5f})")
+                    await websocket.send_json({"type": "action_result", "action": "set_advert_latlon", "success": sent})
+                except Exception as e:
+                    await websocket.send_json({"type": "action_result", "action": "set_advert_latlon", "success": False, "error": str(e)})
+            elif action == "set_channel":
+                ch_idx = int(data.get("channel_idx", 0))
+                ch_name = str(data.get("name", "")).strip()
+                psk_hex = str(data.get("psk", "")).strip()
+                psk_bytes = None
+                if psk_hex:
+                    try:
+                        psk_bytes = bytes.fromhex(psk_hex)
+                    except Exception:
+                        pass
+                if ch_name:
+                    frame = build_set_channel_frame(ch_idx, ch_name, psk_bytes)
+                    sent = await send_to_heltec(frame)
+                    if sent:
+                        discovered_channels[ch_idx] = ch_name
+                        await broadcast_to_browsers({"type": "channels", "channels": discovered_channels})
+                        await broadcast_telegram(f"📻 <b>Canale [{ch_idx}] configurato:</b> <b>{ch_name}</b>")
+                    await websocket.send_json({"type": "action_result", "action": "set_channel", "success": sent, "channel_idx": ch_idx})
+            elif action == "send_self_advert":
+                frame = build_send_self_advert_frame(flood=True)
+                sent = await send_to_heltec(frame)
+                await broadcast_telegram(f"📢 <b>Beacon Advert trasmesso via radio in flood!</b>")
+                await websocket.send_json({"type": "action_result", "action": "send_self_advert", "success": sent})
+            elif action == "reboot":
+                frame = build_reboot_frame()
+                sent = await send_to_heltec(frame)
+                await broadcast_telegram("⚠️ <b>Comando di riavvio inviato alla scheda Heltec V3!</b>")
+                await websocket.send_json({"type": "action_result", "action": "reboot", "success": sent})
+            elif action == "sync_time":
+                frame = build_set_device_time_frame()
+                sent = await send_to_heltec(frame)
+                await websocket.send_json({"type": "action_result", "action": "sync_time", "success": sent})
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
@@ -659,6 +820,82 @@ async def api_send(request: Request):
     })
 
     return {"success": True, "sent_to_heltec": sent, "channel": ch_name}
+
+@app.post("/api/settings/radio")
+async def api_settings_radio(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    freq = float(body.get("freq_mhz", node_info.get("freq_mhz", 869.618)))
+    bw = float(body.get("bw_khz", node_info.get("bw_khz", 62.5)))
+    sf = int(body.get("sf", node_info.get("sf", 8)))
+    cr = int(body.get("cr", node_info.get("cr", 8)))
+    tx_power = int(body.get("tx_power", node_info.get("tx_power", 20)))
+
+    frame_radio = build_set_radio_params_frame(freq, bw, sf, cr)
+    sent_radio = await send_to_heltec(frame_radio)
+    frame_tx = build_set_tx_power_frame(tx_power)
+    sent_tx = await send_to_heltec(frame_tx)
+
+    if sent_radio or sent_tx:
+        node_info["freq_mhz"] = freq
+        node_info["bw_khz"] = bw
+        node_info["sf"] = sf
+        node_info["cr"] = cr
+        node_info["tx_power"] = tx_power
+        await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+        await broadcast_telegram(f"⚙️ <b>Parametri Radio aggiornati via Web:</b>\n{freq} MHz | BW {bw} kHz | SF{sf} CR{cr} | {tx_power} dBm")
+
+    return {"success": sent_radio and sent_tx, "node_info": node_info}
+
+@app.post("/api/settings/node")
+async def api_settings_node(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    name = str(body.get("name", "")).strip()
+    lat = body.get("lat")
+    lon = body.get("lon")
+
+    sent = False
+    if name:
+        frame_name = build_set_advert_name_frame(name)
+        sent = await send_to_heltec(frame_name)
+        if sent:
+            node_info["name"] = name
+            await broadcast_telegram(f"🏷️ <b>Nome nodo aggiornato:</b> <b>{name}</b>")
+
+    if lat is not None and lon is not None:
+        try:
+            f_lat, f_lon = float(lat), float(lon)
+            frame_ll = build_set_advert_latlon_frame(f_lat, f_lon)
+            sent_ll = await send_to_heltec(frame_ll)
+            if sent_ll:
+                node_info["lat"] = f_lat
+                node_info["lon"] = f_lon
+        except Exception:
+            pass
+
+    await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+    return {"success": sent, "node_info": node_info}
+
+@app.post("/api/reboot")
+async def api_reboot():
+    frame = build_reboot_frame()
+    sent = await send_to_heltec(frame)
+    if sent:
+        await broadcast_telegram("⚠️ <b>Riavvio della scheda Heltec richiesto da Web!</b>")
+    return {"success": sent}
+
+@app.post("/api/advert/send")
+async def api_advert_send():
+    frame = build_send_self_advert_frame(flood=True)
+    sent = await send_to_heltec(frame)
+    if sent:
+        await broadcast_telegram("📢 <b>Beacon Advert inviato via radio in flood da Web!</b>")
+    return {"success": sent}
 
 @app.websocket("/ws/mesh")
 async def websocket_mesh_endpoint(websocket: WebSocket):
@@ -865,6 +1102,40 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                             "hops": 0
                         })
                     await send_to_heltec(build_sync_next_msg_frame())
+
+                # PUSH_CODE_SEND_CONFIRMED = 0x82 (130)
+                elif code == 0x82 and len(payload) >= 5:
+                    ack_code = struct.unpack("<I", payload[1:5])[0]
+                    round_trip_ms = struct.unpack("<I", payload[5:9])[0] if len(payload) >= 9 else None
+                    print(f"LoRa ACK Confirmed: code={ack_code}, RTT={round_trip_ms}ms")
+
+                    # Update database for the most recent pending message
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        cur = conn.cursor()
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1")
+                        last_m = cur.fetchone()
+                        if last_m:
+                            update_message_ack(last_m[0], "confirmed", round_trip_ms)
+                        conn.close()
+                    except Exception as e:
+                        print("Error updating ACK:", e)
+
+                    await broadcast_to_browsers({
+                        "type": "message_ack",
+                        "ack_code": ack_code,
+                        "round_trip_ms": round_trip_ms,
+                        "status": "confirmed"
+                    })
+
+                # RESP_CODE_SENT = 6
+                elif code == 6 and len(payload) >= 5:
+                    expected_ack = struct.unpack("<I", payload[1:5])[0]
+                    await broadcast_to_browsers({
+                        "type": "message_in_flight",
+                        "expected_ack": expected_ack,
+                        "status": "air"
+                    })
 
                 # RESP_CODE_NO_MORE_MESSAGES = 10
                 elif code == 10:
