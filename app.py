@@ -639,11 +639,25 @@ async def periodic_heartbeat_loop():
             print("Heartbeat loop error:", e)
             await asyncio.sleep(60)
 
+async def keep_alive_loop():
+    """Pinga il proprio endpoint /health ogni 10 minuti per evitare il sleep di Render (piano free)."""
+    await asyncio.sleep(30)  # aspetta l'avvio completo
+    self_url = "https://meshcore-room-bot.onrender.com/health"
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(self_url)
+                print(f"[KeepAlive] ping → {resp.status_code}")
+        except Exception as e:
+            print(f"[KeepAlive] errore: {e}")
+        await asyncio.sleep(600)  # ogni 10 minuti
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
     asyncio.create_task(telegram_polling_loop())
     asyncio.create_task(periodic_heartbeat_loop())
+    asyncio.create_task(keep_alive_loop())
 
 @app.get("/health")
 async def health():
