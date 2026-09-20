@@ -1,11 +1,17 @@
 import asyncio
 import os
+import sys
 import re
 import struct
 import sqlite3
 import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
+
+# Ensure current directory is in sys.path for Render/Docker uvicorn runners
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, JSONResponse
