@@ -12,6 +12,9 @@ def get_web_client_html() -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>MeshCore Web Client</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+    <!-- Leaflet CSS & JS for Interactive LoRa Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <style>
         :root {
             --bg: #090d16;
@@ -648,6 +651,41 @@ def get_web_client_html() -> str:
             background: #334155;
         }
 
+        /* Map styling */
+        .map-container {
+            width: 100%;
+            height: 320px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            background: #111;
+            margin-top: 8px;
+            position: relative;
+            z-index: 10;
+        }
+
+        .map-stats-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 6px;
+            padding: 0 4px;
+        }
+
+        .leaflet-popup-content-wrapper {
+            background: #111827 !important;
+            color: #f8fafc !important;
+            border: 1px solid #334155 !important;
+            border-radius: 8px !important;
+            font-family: inherit !important;
+        }
+
+        .leaflet-popup-tip {
+            background: #111827 !important;
+        }
+
         /* Bottom Tab Navigation Bar */
         .bottom-nav {
             background: rgba(17, 24, 39, 0.96);
@@ -915,6 +953,31 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
+                <!-- Mappa Nodi & Copertura LoRa (Richiesta Utente) -->
+                <div class="settings-card">
+                    <div class="settings-card-title">🗺️ Mappa Nodi & Copertura LoRa</div>
+                    <p style="font-size:0.8rem; color:var(--text-muted);">
+                        Visualizza la tua stazione Heltec e tutti i nodi ascoltati via radio con coordinate GPS attive.
+                    </p>
+                    <div id="meshMap" class="map-container"></div>
+                    <div class="map-stats-bar">
+                        <span id="mapNodesCount">Nodi con coordinate: 0</span>
+                        <button id="mapCenterBtn" class="btn-icon" style="font-size:0.75rem; padding:3px 8px;">🎯 Centra su di me</button>
+                    </div>
+                </div>
+
+                <!-- Trova Nodi Vicini (Discovery) -->
+                <div class="settings-card">
+                    <div class="settings-card-title">🔍 Trova Nodi Vicini & Scansione Mesh</div>
+                    <p style="font-size:0.8rem; color:var(--text-muted);">
+                        Invia un annuncio radio beacon (zero-hop) e interroga la tabella dei nodi per identificare e sincronizzare tutti i dispositivi LoRa nel raggio d'ascolto.
+                    </p>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:2px;">
+                        <button id="findNearbyNodesBtn" class="btn-action" style="flex:1;">📡 Trova Nodi Vicini</button>
+                        <button id="getGpsLocationBtn" class="btn-action btn-secondary" style="flex:1;">📍 Usa GPS Telefono / Browser</button>
+                    </div>
+                </div>
+
                 <!-- Device Maintenance -->
                 <div class="settings-card">
                     <div class="settings-card-title">🛠️ Strumenti Dispositivo</div>
@@ -967,6 +1030,9 @@ def get_web_client_html() -> str:
         let audioEnabled = true;
         let audioCtx = null;
         let isHeltecConnected = false;
+        let leafletMap = null;
+        let mapMarkers = [];
+        let localNodeMarker = null;
 
         // Sound Synthesizer
         function playChime(type = "recv") {
@@ -1036,9 +1102,117 @@ def get_web_client_html() -> str:
 
                 if (targetTab === "tabMessages") {
                     scrollChatToBottom();
+                } else if (targetTab === "tabSettings") {
+                    setTimeout(() => {
+                        initOrUpdateMap();
+                    }, 100);
                 }
             });
         });
+
+        // Interactive Map Logic
+        function initOrUpdateMap() {
+            const mapContainer = document.getElementById("meshMap");
+            if (!mapContainer || typeof L === "undefined") return;
+
+            // Default fallback center: Italy / Milan area (Buscate: 45.54, 8.81)
+            let centerLat = (nodeInfo && nodeInfo.lat) ? Number(nodeInfo.lat) : 45.543;
+            let centerLon = (nodeInfo && nodeInfo.lon) ? Number(nodeInfo.lon) : 8.815;
+
+            if (!leafletMap) {
+                leafletMap = L.map("meshMap", {
+                    center: [centerLat, centerLon],
+                    zoom: 12,
+                    zoomControl: true
+                });
+
+                // Dark / CartoDB dark tile layer
+                L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                    subdomains: "abcd",
+                    maxZoom: 19
+                }).addTo(leafletMap);
+            } else {
+                leafletMap.invalidateSize();
+            }
+
+            renderMapMarkers();
+        }
+
+        function renderMapMarkers() {
+            if (!leafletMap || typeof L === "undefined") return;
+
+            // Clear old markers
+            mapMarkers.forEach(m => leafletMap.removeLayer(m));
+            mapMarkers = [];
+            if (localNodeMarker) {
+                leafletMap.removeLayer(localNodeMarker);
+                localNodeMarker = null;
+            }
+
+            let validCoordsCount = 0;
+            const bounds = [];
+
+            // Add local node marker
+            const myLat = (nodeInfo && nodeInfo.lat) ? Number(nodeInfo.lat) : null;
+            const myLon = (nodeInfo && nodeInfo.lon) ? Number(nodeInfo.lon) : null;
+            const myName = (nodeInfo && nodeInfo.name) ? nodeInfo.name : "Stazione Heltec";
+
+            if (myLat && myLon) {
+                const homeIcon = L.divIcon({
+                    className: "local-pin",
+                    html: `<div style="background:#10b981; color:#022c22; font-size:1.1rem; width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid white; box-shadow:0 0 12px rgba(16,185,129,0.8);">📡</div>`,
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+                localNodeMarker = L.marker([myLat, myLon], { icon: homeIcon }).addTo(leafletMap);
+                localNodeMarker.bindPopup(`
+                    <div style="font-size:0.88rem; line-height:1.4;">
+                        <b style="color:#10b981; font-size:0.95rem;">📡 ${escapeHtml(myName)} (Tu)</b><br>
+                        <span>Frequenza: <b>${nodeInfo.freq_mhz || 869.618} MHz</b></span><br>
+                        <span>Potenza TX: <b>${nodeInfo.tx_power || 20} dBm</b></span><br>
+                        <small style="color:#94a3b8;">Coordinate: ${myLat.toFixed(5)}, ${myLon.toFixed(5)}</small>
+                    </div>
+                `);
+                bounds.push([myLat, myLon]);
+            }
+
+            // Add heard nodes markers
+            heardNodes.forEach(n => {
+                const nLat = n.lat ? Number(n.lat) : null;
+                const nLon = n.lon ? Number(n.lon) : null;
+                if (nLat && nLon) {
+                    validCoordsCount++;
+                    const nodeIcon = L.divIcon({
+                        className: "node-pin",
+                        html: `<div style="background:#0284c7; color:white; font-size:0.95rem; width:26px; height:26px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid white; box-shadow:0 0 8px rgba(2,132,199,0.7);">📍</div>`,
+                        iconSize: [26, 26],
+                        iconAnchor: [13, 13]
+                    });
+                    const marker = L.marker([nLat, nLon], { icon: nodeIcon }).addTo(leafletMap);
+                    const snrStr = n.last_snr !== null && n.last_snr !== undefined ? ` • SNR: ${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)}dB` : '';
+                    const hopsStr = n.last_hops !== undefined && n.last_hops !== null ? `${n.last_hops} hops` : '';
+                    marker.bindPopup(`
+                        <div style="font-size:0.86rem; line-height:1.4;">
+                            <b style="color:#38bdf8; font-size:0.92rem;">👤 ${escapeHtml(n.node_name)}</b><br>
+                            <span>Canale: <b>${escapeHtml(n.last_channel || 'Radio')}</b></span><br>
+                            <span>Segnale: <b>${hopsStr}${snrStr}</b></span><br>
+                            <small style="color:#94a3b8;">Visto: ${n.last_seen || 'N/A'}</small>
+                        </div>
+                    `);
+                    mapMarkers.push(marker);
+                    bounds.push([nLat, nLon]);
+                }
+            });
+
+            document.getElementById("mapNodesCount").textContent = `Nodi con coordinate GPS: ${validCoordsCount}`;
+
+            if (bounds.length > 0) {
+                try {
+                    leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+                } catch(e) {}
+            }
+        }
 
         // Audio Toggle
         const audioBtn = document.getElementById("audioToggleBtn");
@@ -1335,8 +1509,16 @@ def get_web_client_html() -> str:
             } else if (data.type === "nodes") {
                 heardNodes = data.nodes;
                 renderNodes();
+                renderMapMarkers();
             } else if (data.type === "action_result") {
-                if (data.success) {
+                if (data.action === "find_nearby_nodes") {
+                    if (data.nodes) {
+                        heardNodes = data.nodes;
+                        renderNodes();
+                        renderMapMarkers();
+                    }
+                    showToast("Scansione nodi completata! Tabella nodi e mappa aggiornate.", true);
+                } else if (data.success) {
                     showToast(`Operazione '${data.action}' completata con successo!`, true);
                 } else {
                     showToast(`Operazione '${data.action}' non riuscita.`, false);
@@ -1508,8 +1690,77 @@ def get_web_client_html() -> str:
             fetch("/api/nodes").then(r => r.json()).then(nodes => {
                 heardNodes = nodes;
                 renderNodes();
+                renderMapMarkers();
                 showToast("Lista nodi aggiornata.", true);
             });
+        });
+
+        // Trova Nodi Vicini (Discovery)
+        document.getElementById("findNearbyNodesBtn").addEventListener("click", () => {
+            showToast("🔍 Scansione nodi vicini avviata via radio...", true);
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ action: "find_nearby_nodes" }));
+            } else {
+                fetch("/api/nodes/scan", { method: "POST" })
+                    .then(r => r.json())
+                    .then(res => {
+                        if (res.nodes) {
+                            heardNodes = res.nodes;
+                            renderNodes();
+                            renderMapMarkers();
+                        }
+                        showToast("Scansione completata!", true);
+                    });
+            }
+        });
+
+        // GPS Geolocation from Browser / Phone
+        document.getElementById("getGpsLocationBtn").addEventListener("click", () => {
+            if (!navigator.geolocation) {
+                showToast("Geolocalizzazione non supportata dal tuo browser.", false);
+                return;
+            }
+            showToast("Acquisizione coordinate GPS in corso...", true);
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const lat = parseFloat(pos.coords.latitude.toFixed(5));
+                    const lon = parseFloat(pos.coords.longitude.toFixed(5));
+                    document.getElementById("cfgLat").value = lat;
+                    document.getElementById("cfgLon").value = lon;
+                    nodeInfo.lat = lat;
+                    nodeInfo.lon = lon;
+
+                    // Automatically save to Heltec
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ action: "set_advert_latlon", lat: lat, lon: lon }));
+                    } else {
+                        fetch("/api/settings/node", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ lat: lat, lon: lon })
+                        });
+                    }
+                    showToast(`📍 Posizione GPS rilevata e salvata: (${lat}, ${lon})`, true);
+                    renderMapMarkers();
+                },
+                (err) => {
+                    showToast(`Errore rilevamento GPS: ${err.message}`, false);
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        });
+
+        // Map Centering Button
+        document.getElementById("mapCenterBtn").addEventListener("click", () => {
+            if (!leafletMap) return;
+            const myLat = (nodeInfo && nodeInfo.lat) ? Number(nodeInfo.lat) : null;
+            const myLon = (nodeInfo && nodeInfo.lon) ? Number(nodeInfo.lon) : null;
+            if (myLat && myLon) {
+                leafletMap.setView([myLat, myLon], 13);
+                if (localNodeMarker) localNodeMarker.openPopup();
+            } else {
+                showToast("Nessuna coordinata GPS salvata per la tua stazione.", false);
+            }
         });
 
         // Helpers
