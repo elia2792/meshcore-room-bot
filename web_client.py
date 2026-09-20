@@ -824,22 +824,23 @@ def get_web_client_html() -> str:
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(4, 7, 13, 0.78);
+            background: rgba(4, 7, 13, 0.82);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            display: flex;
+            display: none;
             align-items: center;
             justify-content: center;
-            z-index: 999;
+            z-index: 99999 !important;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.25s ease;
+            transition: opacity 0.2s ease;
             padding: 16px;
         }
 
         .modal-overlay.active {
-            opacity: 1;
-            pointer-events: auto;
+            display: flex !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
         }
 
         .modal-dialog {
@@ -847,14 +848,16 @@ def get_web_client_html() -> str:
             border: 1px solid var(--border-highlight);
             border-radius: 16px;
             width: 100%;
-            max-width: 540px;
+            max-width: 560px;
             max-height: 85vh;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7), 0 0 24px rgba(16, 185, 129, 0.15);
-            transform: scale(0.94);
-            transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85), 0 0 30px rgba(16, 185, 129, 0.2);
+            transform: scale(0.95);
+            transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
             overflow: hidden;
+            position: relative;
+            z-index: 100000 !important;
         }
 
         .modal-overlay.active .modal-dialog {
@@ -1491,11 +1494,35 @@ def get_web_client_html() -> str:
         }
 
         // Show Scan Results Modal Dialog
-        function showScanResultsModal(nodesList) {
+        function showScanResultsModal(nodesList, isScanning = false) {
             const overlay = document.getElementById("scanModalOverlay");
             const body = document.getElementById("scanModalBody");
             const summary = document.getElementById("scanModalSummary");
             if (!overlay || !body) return;
+
+            // Make sure overlay is visible immediately
+            overlay.style.display = "flex";
+            // Trigger animation frame so CSS transition fires
+            requestAnimationFrame(() => {
+                overlay.classList.add("active");
+            });
+
+            if (isScanning) {
+                summary.textContent = "Scansione radio LoRa in corso...";
+                body.innerHTML = `
+                    <div style="text-align: center; color: var(--text-muted); padding: 36px 12px;">
+                        <div style="font-size: 2.6rem; animation: pulseGlow 1.5s infinite ease-in-out; margin-bottom: 12px;">📡</div>
+                        <b style="color: var(--text-main); font-size: 1.05rem;">Scansione radio LoRa in corso...</b>
+                        <div style="font-size: 0.82rem; margin-top: 8px; color: var(--primary);">
+                            Invio beacon zero-hop e sincronizzazione tabella contatti...
+                        </div>
+                        <div style="margin-top: 16px; display: flex; justify-content: center;">
+                            <div class="pulse-dot" style="background: var(--primary); width: 14px; height: 14px; border-radius: 50%;"></div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
 
             body.innerHTML = "";
             const list = (nodesList && nodesList.length > 0) ? nodesList : heardNodes;
@@ -1504,14 +1531,13 @@ def get_web_client_html() -> str:
                 body.innerHTML = `
                     <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
                         <div style="font-size: 2.2rem; margin-bottom: 8px;">📡</div>
-                        <b>Nessun nodo rilevato nelle immediate vicinanze.</b>
+                        <b style="color: var(--text-main);">Nessun nodo rilevato nelle immediate vicinanze.</b>
                         <div style="font-size: 0.8rem; margin-top: 6px; color: var(--text-dim);">
                             I beacon radio zero-hop sono stati inviati. Assicurati che altri nodi LoRa siano accesi sullo stesso canale e frequenza (${nodeInfo.freq_mhz || 869.618} MHz).
                         </div>
                     </div>
                 `;
                 summary.textContent = "Scansione terminata (0 nodi).";
-                overlay.classList.add("active");
                 return;
             }
 
@@ -1555,7 +1581,7 @@ def get_web_client_html() -> str:
                     <div class="scan-telemetry-grid">
                         <div class="telemetry-item">
                             <span class="telemetry-label">📏 Distanza</span>
-                            <span class="telemetry-val" style="color:${distNum ? '#10b981' : 'var(--text-muted)'};">${distStr}</span>
+                            <span class="telemetry-val" style="color:${distNum ? '#10b981' : 'var(--text-muted)'}; font-weight:700;">${distStr}</span>
                         </div>
                         <div class="telemetry-item">
                             <span class="telemetry-label">📶 Segnale SNR</span>
@@ -1583,12 +1609,18 @@ def get_web_client_html() -> str:
             });
 
             summary.textContent = `Trovati ${list.length} nodi con telemetria.`;
-            overlay.classList.add("active");
         }
 
         function closeScanResultsModal() {
             const overlay = document.getElementById("scanModalOverlay");
-            if (overlay) overlay.classList.remove("active");
+            if (overlay) {
+                overlay.classList.remove("active");
+                setTimeout(() => {
+                    if (!overlay.classList.contains("active")) {
+                        overlay.style.display = "none";
+                    }
+                }, 200);
+            }
         }
 
         // Audio Toggle
@@ -1889,13 +1921,14 @@ def get_web_client_html() -> str:
                 renderMapMarkers();
             } else if (data.type === "action_result") {
                 if (data.action === "find_nearby_nodes") {
+                    scanInProgress = false;
                     if (data.nodes) {
                         heardNodes = data.nodes;
                         renderNodes();
                         renderMapMarkers();
                     }
                     showToast("Scansione nodi completata!", true);
-                    showScanResultsModal(heardNodes);
+                    showScanResultsModal(heardNodes, false);
                 } else if (data.success) {
                     showToast(`Operazione '${data.action}' completata con successo!`, true);
                 } else {
@@ -2074,23 +2107,42 @@ def get_web_client_html() -> str:
         });
 
         // Trova Nodi Vicini (Discovery)
+        let scanInProgress = false;
         document.getElementById("findNearbyNodesBtn").addEventListener("click", () => {
-            showToast("🔍 Scansione nodi vicini avviata via radio...", true);
+            showToast("🔍 Scansione nodi vicini avviata...", true);
+            // 1. Immediately open modal with active scanning animation
+            showScanResultsModal(null, true);
+            scanInProgress = true;
+
+            const triggerScanSuccess = (nodes) => {
+                if (!scanInProgress) return;
+                scanInProgress = false;
+                if (nodes && Array.isArray(nodes)) {
+                    heardNodes = nodes;
+                    renderNodes();
+                    renderMapMarkers();
+                }
+                showScanResultsModal(heardNodes, false);
+            };
+
+            // 2. Transmit discovery command via WebSocket
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ action: "find_nearby_nodes" }));
-            } else {
-                fetch("/api/nodes/scan", { method: "POST" })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (res.nodes) {
-                            heardNodes = res.nodes;
-                            renderNodes();
-                            renderMapMarkers();
-                        }
-                        showToast("Scansione completata!", true);
-                        showScanResultsModal(heardNodes);
-                    });
             }
+
+            // Fallback REST call if WebSocket is closed or if it takes > 2.5s
+            setTimeout(() => {
+                if (scanInProgress) {
+                    fetch("/api/nodes/scan", { method: "POST" })
+                        .then(r => r.json())
+                        .then(res => {
+                            triggerScanSuccess(res.nodes || heardNodes);
+                        })
+                        .catch(() => {
+                            triggerScanSuccess(heardNodes);
+                        });
+                }
+            }, 2500);
         });
 
         // Scan Modal Close Listeners
