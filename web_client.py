@@ -654,7 +654,7 @@ def get_web_client_html() -> str:
         /* Map styling */
         .map-container {
             width: 100%;
-            height: 320px;
+            height: 380px;
             border-radius: 12px;
             border: 1px solid var(--border);
             overflow: hidden;
@@ -662,6 +662,52 @@ def get_web_client_html() -> str:
             margin-top: 8px;
             position: relative;
             z-index: 10;
+        }
+
+        .map-iframe-container {
+            width: 100%;
+            height: 480px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            background: #0f172a;
+            margin-top: 8px;
+            position: relative;
+            z-index: 10;
+        }
+
+        .map-mode-tabs {
+            display: flex;
+            background: var(--bg);
+            padding: 3px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .map-mode-tab {
+            flex: 1;
+            padding: 6px 10px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            border-radius: 6px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+
+        .map-mode-tab.active {
+            background: var(--surface-card);
+            color: var(--primary);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            font-weight: 700;
         }
 
         .map-stats-bar {
@@ -955,14 +1001,49 @@ def get_web_client_html() -> str:
 
                 <!-- Mappa Nodi & Copertura LoRa (Richiesta Utente) -->
                 <div class="settings-card">
-                    <div class="settings-card-title">🗺️ Mappa Nodi & Copertura LoRa</div>
-                    <p style="font-size:0.8rem; color:var(--text-muted);">
-                        Visualizza la tua stazione Heltec e tutti i nodi ascoltati via radio con coordinate GPS attive.
-                    </p>
-                    <div id="meshMap" class="map-container"></div>
-                    <div class="map-stats-bar">
-                        <span id="mapNodesCount">Nodi con coordinate: 0</span>
-                        <button id="mapCenterBtn" class="btn-icon" style="font-size:0.75rem; padding:3px 8px;">🎯 Centra su di me</button>
+                    <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:8px;">
+                        <div class="settings-card-title" style="border-bottom:none; padding-bottom:0; margin:0;">
+                            🗺️ Mappa Nodi LoRa
+                        </div>
+                        <a href="https://livemapnew.meshcoreitalia.it/" target="_blank" class="btn-icon" style="font-size:0.75rem; padding:4px 8px;" title="Apri in nuova scheda">
+                            🔗 Apri MeshCore Italia ↗
+                        </a>
+                    </div>
+
+                    <!-- Map Mode Selector -->
+                    <div class="map-mode-tabs">
+                        <button id="tabMapLiveBtn" class="map-mode-tab active" type="button">
+                            🇮🇹 Live Map MeshCore Italia
+                        </button>
+                        <button id="tabMapLocalBtn" class="map-mode-tab" type="button">
+                            📡 Nodi Locali Stazione
+                        </button>
+                    </div>
+
+                    <!-- Mode 1: Live Map MeshCore Italia iframe -->
+                    <div id="viewMapLive" style="display:block;">
+                        <div class="map-iframe-container">
+                            <iframe 
+                                id="meshCoreLiveMapIframe" 
+                                src="https://livemapnew.meshcoreitalia.it/" 
+                                style="width:100%; height:100%; border:none;" 
+                                allow="geolocation" 
+                                loading="lazy">
+                            </iframe>
+                        </div>
+                        <div class="map-stats-bar">
+                            <span>Mappa live globale dei nodi MeshCore Italia con percorsi e pacchetti in tempo reale.</span>
+                            <button id="reloadLiveMapBtn" class="btn-icon" style="font-size:0.75rem; padding:3px 8px;">🔄 Ricarica</button>
+                        </div>
+                    </div>
+
+                    <!-- Mode 2: Local Stored Leaflet Map -->
+                    <div id="viewMapLocal" style="display:none;">
+                        <div id="meshMap" class="map-container"></div>
+                        <div class="map-stats-bar">
+                            <span id="mapNodesCount">Nodi con coordinate: 0</span>
+                            <button id="mapCenterBtn" class="btn-icon" style="font-size:0.75rem; padding:3px 8px;">🎯 Centra su di me</button>
+                        </div>
                     </div>
                 </div>
 
@@ -1760,6 +1841,37 @@ def get_web_client_html() -> str:
                 if (localNodeMarker) localNodeMarker.openPopup();
             } else {
                 showToast("Nessuna coordinata GPS salvata per la tua stazione.", false);
+            }
+        });
+
+        // Map Mode Switcher (MeshCore Italia Live Map vs Local Map)
+        const tabMapLiveBtn = document.getElementById("tabMapLiveBtn");
+        const tabMapLocalBtn = document.getElementById("tabMapLocalBtn");
+        const viewMapLive = document.getElementById("viewMapLive");
+        const viewMapLocal = document.getElementById("viewMapLocal");
+
+        tabMapLiveBtn.addEventListener("click", () => {
+            tabMapLiveBtn.classList.add("active");
+            tabMapLocalBtn.classList.remove("active");
+            viewMapLive.style.display = "block";
+            viewMapLocal.style.display = "none";
+        });
+
+        tabMapLocalBtn.addEventListener("click", () => {
+            tabMapLocalBtn.classList.add("active");
+            tabMapLiveBtn.classList.remove("active");
+            viewMapLocal.style.display = "block";
+            viewMapLive.style.display = "none";
+            setTimeout(() => {
+                initOrUpdateMap();
+            }, 100);
+        });
+
+        document.getElementById("reloadLiveMapBtn").addEventListener("click", () => {
+            const iframe = document.getElementById("meshCoreLiveMapIframe");
+            if (iframe) {
+                iframe.src = iframe.src;
+                showToast("Mappa MeshCore Italia ricaricata.", true);
             }
         });
 
