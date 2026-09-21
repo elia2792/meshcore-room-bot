@@ -1307,9 +1307,16 @@ def get_web_client_html() -> str:
         let nodeInfo = { name: "Buscate", freq_mhz: 869.618, bw_khz: 62.5, sf: 8, cr: 8, tx_power: 20 };
         let heardNodes = [];
         
+        const STORAGE_KEY = "meshcore_room_messages_v3";
+
+        function getMsgKey(m) {
+            if (m.client_id) return `cid_${m.client_id}`;
+            return `${m.timestamp || ''}_${m.sender || ''}_${m.content || ''}`;
+        }
+
         function loadMessagesFromStorage() {
             try {
-                const raw = localStorage.getItem("meshcore_room_messages");
+                const raw = localStorage.getItem(STORAGE_KEY);
                 if (raw) return JSON.parse(raw);
             } catch(e) {}
             return [];
@@ -1317,7 +1324,7 @@ def get_web_client_html() -> str:
 
         function saveMessagesToStorage() {
             try {
-                localStorage.setItem("meshcore_room_messages", JSON.stringify(messages.slice(-500)));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-500)));
             } catch(e) {}
         }
 
@@ -1688,10 +1695,10 @@ def get_web_client_html() -> str:
                 if (res.ok) {
                     const serverMsgs = await res.json();
                     if (serverMsgs && serverMsgs.length > 0) {
-                        const existingKeys = new Set(messages.map(m => m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`));
+                        const existingKeys = new Set(messages.map(getMsgKey));
                         let added = 0;
                         serverMsgs.forEach(m => {
-                            const key = m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`;
+                            const key = getMsgKey(m);
                             if (!existingKeys.has(key)) {
                                 if (m.channel_idx === undefined || m.channel_idx === null) m.channel_idx = channelIdx;
                                 messages.push(m);
@@ -1935,9 +1942,9 @@ def get_web_client_html() -> str:
                 if (data.channels) channels = data.channels;
                 if (data.node_info) nodeInfo = Object.assign(nodeInfo, data.node_info);
                 if (data.recent_messages && data.recent_messages.length > 0) {
-                    const existingKeys = new Set(messages.map(m => m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`));
+                    const existingKeys = new Set(messages.map(getMsgKey));
                     data.recent_messages.forEach(m => {
-                        const key = m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`;
+                        const key = getMsgKey(m);
                         if (!existingKeys.has(key)) {
                             messages.push(m);
                             existingKeys.add(key);
@@ -1979,8 +1986,8 @@ def get_web_client_html() -> str:
                     }
                 }
                 if (!matched) {
-                    const key = data.id ? `id_${data.id}` : `${data.timestamp}_${data.sender}_${data.content}`;
-                    const exists = messages.some(m => (m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`) === key);
+                    const key = getMsgKey(data);
+                    const exists = messages.some(m => getMsgKey(m) === key);
                     if (!exists) {
                         messages.push(data);
                         if (messages.length > 500) messages.shift();
