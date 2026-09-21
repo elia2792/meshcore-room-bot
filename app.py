@@ -1853,7 +1853,7 @@ async def telegram_polling_loop():
                                 register_subscription(chat_id)
                                 last_telegram_sender = {
                                     "chat_id": chat_id,
-                                    "message_id": message.get("message_id"),
+                                    "message_id": msg.get("message_id"),
                                     "thread_id": thread_id,
                                     "timestamp": time.time()
                                 }
@@ -2021,7 +2021,7 @@ async def telegram_polling_loop():
                         register_subscription(chat_id)
                         last_telegram_sender = {
                             "chat_id": chat_id,
-                            "message_id": message.get("message_id"),
+                            "message_id": msg.get("message_id"),
                             "thread_id": thread_id,
                             "timestamp": time.time()
                         }
