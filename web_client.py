@@ -1794,8 +1794,8 @@ def get_web_client_html() -> str:
                             hopInfo = m.hops === 0 ? " • Diretto RF" : ` • ${m.hops} salti`;
                         }
                         details += `<span class="ack-indicator confirmed">✓✓ RECAPITATO${hopInfo}${rtt}</span>`;
-                    } else if (status === "air") {
-                        details += `<span class="ack-indicator air">✓ In etere LoRa...</span>`;
+                    } else if (status === "air" || status === "transmitted") {
+                        details += `<span class="ack-indicator air">✓ Trasmesso in etere LoRa</span>`;
                     } else if (status === "sent_to_radio") {
                         details += `<span class="ack-indicator pending">✓ Inviato alla radio</span>`;
                     } else {
@@ -1983,11 +1983,12 @@ def get_web_client_html() -> str:
             } else if (data.type === "message_in_flight") {
                 // Sent to radio, in the air
                 for (let i = messages.length - 1; i >= 0; i--) {
-                    if (messages[i].source === "Web Client" && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio")) {
-                        messages[i].ack_status = "air";
+                    if ((messages[i].source === "Web Client" || messages[i].source === "Telegram") && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio" || messages[i].ack_status === "pending")) {
+                        messages[i].ack_status = data.status || "transmitted";
                         break;
                     }
                 }
+                saveMessagesToStorage();
                 renderMessages();
             } else if (data.type === "message_ack") {
                 // Confirmed delivery ACK by remote node

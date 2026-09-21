@@ -1373,9 +1373,23 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                 elif code == 10:
                     pass
 
-                # RESP_CODE_OK = 0
+                # RESP_CODE_OK = 0 (Heltec radio successfully transmitted the packet)
                 elif code == 0:
-                    pass
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        cur = conn.cursor()
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND ack_status NOT IN ('confirmed', 'transmitted') ORDER BY id DESC LIMIT 1")
+                        last_m = cur.fetchone()
+                        if last_m:
+                            update_message_ack(last_m[0], "transmitted")
+                        conn.close()
+                    except Exception as e:
+                        print("Error updating transmitted status:", e)
+
+                    await broadcast_to_browsers({
+                        "type": "message_in_flight",
+                        "status": "transmitted"
+                    })
 
     except WebSocketDisconnect:
         print("Heltec V3 disconnected.")
