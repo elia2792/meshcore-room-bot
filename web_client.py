@@ -251,6 +251,19 @@ def get_web_client_html() -> str:
             box-shadow: 0 2px 8px var(--primary-glow);
         }
 
+        .chip-badge {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-size: 0.72rem;
+            font-weight: 700;
+        }
+
+        .channel-chip.active .chip-badge {
+            background: rgba(0, 0, 0, 0.35);
+            color: #fff;
+        }
+
         .chat-messages-scroll {
             flex: 1;
             padding: 14px 16px;
@@ -1413,11 +1426,36 @@ def get_web_client_html() -> str:
         }
 
         function loadMessagesFromStorage() {
+            let combined = [];
+            const existingKeys = new Set();
+
+            function importFromKey(key) {
+                try {
+                    const raw = localStorage.getItem(key);
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (Array.isArray(parsed)) {
+                            parsed.forEach(m => {
+                                const k = getMsgKey(m);
+                                if (!existingKeys.has(k)) {
+                                    combined.push(m);
+                                    existingKeys.add(k);
+                                }
+                            });
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            importFromKey(STORAGE_KEY);
+            importFromKey("meshcore_room_messages");
+            importFromKey("meshcore_chat_messages_v1");
+
+            combined.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
             try {
-                const raw = localStorage.getItem(STORAGE_KEY);
-                if (raw) return JSON.parse(raw);
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-500)));
             } catch(e) {}
-            return [];
+            return combined;
         }
 
         function saveMessagesToStorage() {
@@ -1845,12 +1883,32 @@ def get_web_client_html() -> str:
         function renderChannelsBar() {
             const bar = document.getElementById("channelsNavBar");
             bar.innerHTML = "";
+
+            // "Tutti i Canali" Chip
+            const allChip = document.createElement("button");
+            allChip.className = `channel-chip ${activeChannelIdx === -1 ? "active" : ""}`;
+            allChip.innerHTML = `<span>🌐 Tutti</span> <span class="chip-badge">${messages.length}</span>`;
+            allChip.addEventListener("click", () => {
+                activeChannelIdx = -1;
+                document.getElementById("currentChannelName").textContent = `🌐 Tutti i Canali`;
+                renderChannelsBar();
+                renderMessages();
+            });
+            bar.appendChild(allChip);
+
             const keys = Object.keys(channels).map(Number).sort((a,b) => a - b);
             keys.forEach(idx => {
                 const name = channels[idx];
+                const count = messages.filter(m => {
+                    if (m.channel_idx !== undefined && m.channel_idx !== null) {
+                        return Number(m.channel_idx) === Number(idx);
+                    }
+                    return m.channel === name || m.channel === `Canale ${idx}` || m.channel === `Canale #${idx}`;
+                }).length;
+
                 const chip = document.createElement("button");
                 chip.className = `channel-chip ${idx === activeChannelIdx ? "active" : ""}`;
-                chip.textContent = `[${idx}] ${name}`;
+                chip.innerHTML = `<span>[${idx}] ${name}</span> <span class="chip-badge">${count}</span>`;
                 chip.addEventListener("click", () => {
                     activeChannelIdx = idx;
                     document.getElementById("currentChannelName").textContent = `${name} [${idx}]`;
@@ -1860,15 +1918,21 @@ def get_web_client_html() -> str:
                 });
                 bar.appendChild(chip);
             });
-            document.getElementById("currentChannelName").textContent = `${channels[activeChannelIdx] || "Canale"} [${activeChannelIdx}]`;
+
+            if (activeChannelIdx === -1) {
+                document.getElementById("currentChannelName").textContent = `🌐 Tutti i Canali`;
+            } else {
+                document.getElementById("currentChannelName").textContent = `${channels[activeChannelIdx] || "Canale"} [${activeChannelIdx}]`;
+            }
         }
 
         // Render Messages List
         function renderMessages() {
             const container = document.getElementById("chatMessagesScroll");
-            container.innerHTML = `<div class="chat-date-separator"><span>Oggi • Canale [${activeChannelIdx}] ${channels[activeChannelIdx] || ""}</span></div>`;
+            const chTitle = activeChannelIdx === -1 ? "🌐 Tutti i Canali" : `Canale [${activeChannelIdx}] ${channels[activeChannelIdx] || ""}`;
+            container.innerHTML = `<div class="chat-date-separator"><span>Oggi • ${chTitle}</span></div>`;
 
-            const filtered = messages.filter(m => {
+            const filtered = activeChannelIdx === -1 ? messages : messages.filter(m => {
                 if (m.channel_idx !== undefined && m.channel_idx !== null) {
                     return Number(m.channel_idx) === Number(activeChannelIdx);
                 }
@@ -1892,7 +1956,12 @@ def get_web_client_html() -> str:
                 // Sender Header
                 const senderDiv = document.createElement("div");
                 senderDiv.className = "msg-sender-name";
-                senderDiv.textContent = m.sender || (isOut ? "Tu" : "Nodo Radio");
+                let senderText = m.sender || (isOut ? "Tu" : "Nodo Radio");
+                if (activeChannelIdx === -1 && m.channel) {
+                    senderDiv.innerHTML = `${escapeHtml(senderText)} <span class="node-badge" style="font-size:0.7rem; font-weight:normal; margin-left:6px; padding:1px 6px;">${escapeHtml(m.channel)}</span>`;
+                } else {
+                    senderDiv.textContent = senderText;
+                }
                 wrap.appendChild(senderDiv);
 
                 // Bubble Body
@@ -2241,13 +2310,14 @@ def get_web_client_html() -> str:
             }
 
             const clientMsgId = "msg_" + Date.now();
-            const chName = channels[activeChannelIdx] || `Canale ${activeChannelIdx}`;
+            const targetChannelIdx = activeChannelIdx === -1 ? 0 : activeChannelIdx;
+            const chName = channels[targetChannelIdx] || `Canale ${targetChannelIdx}`;
             const optimisticMsg = {
                 client_id: clientMsgId,
                 source: "Web Client",
                 sender: sender,
                 channel: chName,
-                channel_idx: activeChannelIdx,
+                channel_idx: targetChannelIdx,
                 content: text,
                 reply_to_sender: replySender,
                 reply_to_text: replyText,
@@ -2263,7 +2333,7 @@ def get_web_client_html() -> str:
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({
                     action: "send_message",
-                    channel_idx: activeChannelIdx,
+                    channel_idx: targetChannelIdx,
                     text: finalLoRaText,
                     sender: sender,
                     client_id: clientMsgId,
@@ -2281,7 +2351,7 @@ def get_web_client_html() -> str:
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
-                            channel_idx: activeChannelIdx,
+                            channel_idx: targetChannelIdx,
                             text: finalLoRaText,
                             sender: sender,
                             reply_to_sender: replySender,
