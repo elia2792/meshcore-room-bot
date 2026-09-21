@@ -514,6 +514,9 @@ def build_main_menu_keyboard() -> dict:
             [
                 {"text": "⚙️ Impostazioni", "callback_data": "menu_settings"},
                 {"text": "📜 Storico Room", "callback_data": "menu_history"}
+            ],
+            [
+                {"text": "🌐 Apri Web Client UI", "url": "https://meshcore-room-bot.onrender.com/app"}
             ]
         ]
     }
@@ -1777,6 +1780,7 @@ async def telegram_polling_loop():
                             "🔗 https://meshcore-room-bot.onrender.com/app\n\n"
                             "<i>Include chat in tempo reale, cambio canali con un tocco, telemetria radio e lista dei nodi ascoltati.</i>",
                             chat_id=chat_id,
+                            reply_markup={"inline_keyboard": [[{"text": "🚀 Apri Web Client", "url": "https://meshcore-room-bot.onrender.com/app"}]]},
                             message_thread_id=thread_id
                         )
 
