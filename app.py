@@ -188,7 +188,7 @@ def record_heard_node(node_name: str, snr: Optional[float], hops: int, channel: 
     except Exception as e:
         print("DB record_heard_node error:", e)
 
-def get_recent_heard_nodes(limit: int = 10) -> List[dict]:
+def get_recent_heard_nodes(limit: int = 50) -> List[dict]:
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -458,6 +458,8 @@ async def query_all_heltec_channels():
     for idx in range(16):
         await send_to_heltec(build_get_channel_frame(idx))
         await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
+    await send_to_heltec(build_get_contacts_frame(0))
 
 def resolve_channel(target_str: str) -> Optional[int]:
     clean = target_str.strip().lstrip("#")
@@ -777,7 +779,7 @@ async def websocket_client_endpoint(websocket: WebSocket):
             "channels": discovered_channels,
             "stats": stats,
             "recent_messages": get_recent_messages(60),
-            "recent_nodes": get_recent_heard_nodes(25)
+            "recent_nodes": get_recent_heard_nodes(100)
         }
         await websocket.send_json(init_payload)
 
@@ -938,7 +940,7 @@ async def api_messages(limit: int = 50, channel: Optional[str] = None):
     return get_recent_messages(limit, channel=channel)
 
 @app.get("/api/nodes")
-async def api_nodes(limit: int = 30):
+async def api_nodes(limit: int = 100):
     return get_recent_heard_nodes(limit)
 
 @app.post("/api/send")
@@ -1431,7 +1433,7 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
     # ── Nodi ascoltati (da menu) ────────────────────────────────────────────
     elif data in ("menu_heard", "heard_nodes"):
         await ack()
-        nodes = get_recent_heard_nodes(15)
+        nodes = get_recent_heard_nodes(50)
         my_lat = node_info.get("lat")
         my_lon = node_info.get("lon")
         await send_telegram(
@@ -1494,7 +1496,7 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
             frame_contacts = build_get_contacts_frame(0)
             await send_to_heltec(frame_contacts)
             await asyncio.sleep(5.0)
-            nodes = get_recent_heard_nodes(30)
+            nodes = get_recent_heard_nodes(50)
             my_lat = node_info.get("lat")
             my_lon = node_info.get("lon")
             result_text = (
@@ -1719,19 +1721,21 @@ async def telegram_polling_loop():
                         )
 
                     elif text.startswith("/nodi") or text.startswith("/heard"):
-                        nodes = get_recent_heard_nodes(12)
+                        req_limit = 30
+                        parts = text.split()
+                        if len(parts) > 1 and parts[1].isdigit():
+                            req_limit = min(int(parts[1]), 100)
+                        nodes = get_recent_heard_nodes(req_limit)
                         if not nodes:
                             await send_telegram("ℹ️ Nessun nodo radio memorizzato di recente.", chat_id=chat_id, message_thread_id=thread_id)
                         else:
-                            lines = ["👥 <b>Nodi Radio Ascoltati di Recente:</b>\n"]
-                            for n in nodes:
-                                snr_info = f", SNR: {n['last_snr']:+.1f}dB" if n["last_snr"] is not None else ""
-                                lines.append(f"• <b>{n['node_name']}</b> (Canale: {n['last_channel']}{snr_info}, {n['last_hops']} salti)")
-                                n_lat = n.get("lat")
-                                n_lon = n.get("lon")
-                                if n_lat and n_lon:
-                                    lines.append(f"  📍 <a href='https://www.openstreetmap.org/?mlat={n_lat}&mlon={n_lon}#map=14/{n_lat}/{n_lon}'>Posizione GPS ({n_lat:.4f}, {n_lon:.4f})</a>")
-                            await send_telegram("\n".join(lines), chat_id=chat_id, message_thread_id=thread_id)
+                            my_lat = node_info.get("lat")
+                            my_lon = node_info.get("lon")
+                            await send_telegram(
+                                format_node_list_rich(nodes, my_lat, my_lon),
+                                chat_id=chat_id,
+                                message_thread_id=thread_id
+                            )
 
                     elif text.startswith("/report") or text.startswith("/bollettino"):
                         rep = await generate_report_text()
