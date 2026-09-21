@@ -1689,7 +1689,7 @@ def get_web_client_html() -> str:
             }
 
             filtered.forEach(m => {
-                const isOut = m.source === "Web Client" || m.source === "Web API";
+                const isOut = m.source === "Web Client" || m.source === "Web API" || m.source === "Telegram";
                 const wrap = document.createElement("div");
                 wrap.className = `msg-bubble-wrap ${isOut ? "outgoing" : "incoming"}`;
 
@@ -1715,7 +1715,7 @@ def get_web_client_html() -> str:
                 if (m.snr !== undefined && m.snr !== null) {
                     details += `<span>• SNR: ${m.snr > 0 ? '+' : ''}${Number(m.snr).toFixed(1)}dB</span>`;
                 }
-                if (m.hops !== undefined && m.hops !== null) {
+                if (m.hops !== undefined && m.hops !== null && !isOut) {
                     const hopsLabel = m.hops === 0 ? "Diretto" : `${m.hops} salti`;
                     details += `<span>• ${hopsLabel}</span>`;
                 }
@@ -1724,11 +1724,15 @@ def get_web_client_html() -> str:
                     const status = m.ack_status || (m.sent_to_radio ? "sent_to_radio" : "pending");
                     if (status === "confirmed") {
                         const rtt = m.rtt_ms ? ` (${m.rtt_ms}ms)` : "";
-                        details += `<span class="ack-indicator confirmed">✓✓ Ricevuto da nodo${rtt}</span>`;
+                        let hopInfo = "";
+                        if (m.hops !== undefined && m.hops !== null) {
+                            hopInfo = m.hops === 0 ? " • Diretto RF" : ` • ${m.hops} salti`;
+                        }
+                        details += `<span class="ack-indicator confirmed" style="color: var(--primary); font-weight: 600;">✓✓ Ricevuto da nodo mesh${hopInfo}${rtt}</span>`;
                     } else if (status === "air" || status === "sent_to_radio") {
-                        details += `<span class="ack-indicator air">✓ Trasmesso in etere</span>`;
+                        details += `<span class="ack-indicator air">✓ In etere LoRa...</span>`;
                     } else {
-                        details += `<span class="ack-indicator pending">⏳ In invio...</span>`;
+                        details += `<span class="ack-indicator pending">⏳ In trasmissione...</span>`;
                     }
                 }
 
@@ -1905,16 +1909,20 @@ def get_web_client_html() -> str:
             } else if (data.type === "message_ack") {
                 // Confirmed delivery ACK by remote node
                 for (let i = messages.length - 1; i >= 0; i--) {
-                    if (messages[i].source === "Web Client" || messages[i].source === "Web API") {
+                    if (messages[i].source === "Web Client" || messages[i].source === "Web API" || messages[i].source === "Telegram") {
                         messages[i].ack_status = "confirmed";
                         messages[i].rtt_ms = data.round_trip_ms;
+                        if (data.hops !== undefined && data.hops !== null) {
+                            messages[i].hops = data.hops;
+                        }
                         break;
                     }
                 }
                 renderMessages();
                 playChime("ack");
                 const rttStr = data.round_trip_ms ? ` in ${data.round_trip_ms}ms` : "";
-                showToast(`✅ Ricezione confermata da nodo mesh${rttStr}!`, true);
+                const hopsStr = data.hops_str ? ` (${data.hops_str})` : (data.hops !== undefined && data.hops !== null ? (data.hops === 0 ? " (Diretto RF)" : ` (${data.hops} salti)`) : "");
+                showToast(`✅ Ricevuto da nodo mesh${hopsStr}${rttStr}!`, true);
             } else if (data.type === "nodes") {
                 heardNodes = data.nodes;
                 renderNodes();
