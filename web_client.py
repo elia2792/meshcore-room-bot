@@ -1968,13 +1968,25 @@ def get_web_client_html() -> str:
                 updateHeader();
                 populateSettingsInputs();
             } else if (data.type === "new_message") {
-                const key = data.id ? `id_${data.id}` : `${data.timestamp}_${data.sender}_${data.content}`;
-                const exists = messages.some(m => (m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`) === key);
-                if (!exists) {
-                    messages.push(data);
-                    if (messages.length > 500) messages.shift();
-                    saveMessagesToStorage();
+                let matched = false;
+                if (data.client_id) {
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                        if (messages[i].client_id === data.client_id) {
+                            Object.assign(messages[i], data);
+                            matched = true;
+                            break;
+                        }
+                    }
                 }
+                if (!matched) {
+                    const key = data.id ? `id_${data.id}` : `${data.timestamp}_${data.sender}_${data.content}`;
+                    const exists = messages.some(m => (m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`) === key);
+                    if (!exists) {
+                        messages.push(data);
+                        if (messages.length > 500) messages.shift();
+                    }
+                }
+                saveMessagesToStorage();
                 renderMessages();
                 if (data.source === "LoRa Mesh") {
                     playChime("recv");
@@ -2041,6 +2053,22 @@ def get_web_client_html() -> str:
             btn.disabled = true;
 
             const clientMsgId = "msg_" + Date.now();
+            const chName = channels[activeChannelIdx] || `Canale ${activeChannelIdx}`;
+            const optimisticMsg = {
+                client_id: clientMsgId,
+                source: "Web Client",
+                sender: sender,
+                channel: chName,
+                channel_idx: activeChannelIdx,
+                content: text,
+                timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+                snr: null,
+                hops: 0,
+                sent_to_radio: false,
+                ack_status: "pending"
+            };
+            messages.push(optimisticMsg);
+            renderMessages();
 
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({
