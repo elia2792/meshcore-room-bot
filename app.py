@@ -58,6 +58,7 @@ discovered_channels: Dict[int, str] = {
 }
 chat_active_channel: Dict[str, int] = {}  # chat_id -> channel_idx
 chat_pending_input: Dict[str, str] = {}   # chat_id -> pending setting type (for state machine)
+last_telegram_sender: Dict[str, Any] = {}  # {chat_id, message_id, thread_id, timestamp}
 default_channel_idx: int = 0
 node_info: Dict[str, Any] = {
     "name": "Buscate",
@@ -342,7 +343,7 @@ def build_message_inline_keyboard(ch_idx: int, ch_name: str) -> dict:
         ]
     }
 
-async def send_telegram(text: str, chat_id: str = TELEGRAM_CHAT_ID, reply_markup: Optional[dict] = None, message_thread_id: Optional[int] = None):
+async def send_telegram(text: str, chat_id: str = TELEGRAM_CHAT_ID, reply_markup: Optional[dict] = None, message_thread_id: Optional[int] = None, reply_to_message_id: Optional[int] = None):
     if not TELEGRAM_BOT_TOKEN or not chat_id:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -351,6 +352,8 @@ async def send_telegram(text: str, chat_id: str = TELEGRAM_CHAT_ID, reply_markup
         payload["reply_markup"] = reply_markup
     if message_thread_id:
         payload["message_thread_id"] = message_thread_id
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(url, json=payload)
@@ -490,6 +493,9 @@ def build_channels_keyboard(current_idx: int) -> dict:
     buttons.append([
         {"text": "🔄 Aggiorna lista", "callback_data": "refresh_channels"},
         {"text": "👥 Nodi Ascoltati", "callback_data": "heard_nodes"}
+    ])
+    buttons.append([
+        {"text": "◀️ Torna al Menu Principale", "callback_data": "back_to_menu"}
     ])
     return {"inline_keyboard": buttons}
 
@@ -1336,12 +1342,20 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     })
 
                     # Notifica Telegram di ricezione confermata
-                    await broadcast_telegram(
-                        f"✅ <b>[Conferma Ricezione Mesh • ACK]</b>\n"
-                        f"📡 Il tuo messaggio è stato ricevuto con successo da un nodo della rete!\n"
-                        f"• ⏱️ <b>Tempo Round-Trip:</b> {rtt_str}\n"
-                        f"• 📶 <b>Salti (Hop):</b> {hops_str}"
+                    ack_tg_text = (
+                        f"🟢 <b>✓✓ RECAPITATO CON SUCCESSO!</b>\n"
+                        f"📡 Il tuo messaggio è stato ricevuto e confermato da un nodo della rete mesh!\n"
+                        f"• 📶 <b>Percorso:</b> {hops_str}\n"
+                        f"• ⏱️ <b>Round-Trip:</b> {rtt_str}"
                     )
+                    if last_telegram_sender and (time.time() - last_telegram_sender.get("timestamp", 0) < 120):
+                        await send_telegram(
+                            ack_tg_text,
+                            chat_id=str(last_telegram_sender["chat_id"]),
+                            reply_to_message_id=last_telegram_sender.get("message_id"),
+                            message_thread_id=last_telegram_sender.get("thread_id")
+                        )
+                    await broadcast_telegram(ack_tg_text)
 
                 # RESP_CODE_SENT = 6
                 elif code == 6 and len(payload) >= 2:
@@ -1836,6 +1850,13 @@ async def telegram_polling_loop():
                                 await send_telegram(f"⚠️ Canale '{target_ch}' non trovato. Usa <code>/canali</code>.", chat_id=chat_id, message_thread_id=thread_id)
                             else:
                                 ch_name = discovered_channels[resolved]
+                                register_subscription(chat_id)
+                                last_telegram_sender = {
+                                    "chat_id": chat_id,
+                                    "message_id": message.get("message_id"),
+                                    "thread_id": thread_id,
+                                    "timestamp": time.time()
+                                }
                                 save_message("Telegram", sender_name, ch_name, content)
                                 frame = build_channel_send_frame(resolved, f"[{sender_name}]: {content}")
                                 sent = await send_to_heltec(frame)
@@ -1997,6 +2018,13 @@ async def telegram_polling_loop():
                         if not payload_text:
                             continue
 
+                        register_subscription(chat_id)
+                        last_telegram_sender = {
+                            "chat_id": chat_id,
+                            "message_id": message.get("message_id"),
+                            "thread_id": thread_id,
+                            "timestamp": time.time()
+                        }
                         save_message("Telegram", sender_name, target_ch_name, payload_text)
                         frame = build_channel_send_frame(target_ch_idx, f"[{sender_name}]: {payload_text}")
                         sent = await send_to_heltec(frame)
