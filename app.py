@@ -277,7 +277,7 @@ def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = Non
     except Exception as e:
         print("DB update_message_ack error:", e)
 
-def get_recent_messages(limit: int = 15, channel: Optional[str] = None) -> List[dict]:
+def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List[dict]:
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -460,6 +460,8 @@ async def query_all_heltec_channels():
         await asyncio.sleep(0.05)
     await asyncio.sleep(0.1)
     await send_to_heltec(build_get_contacts_frame(0))
+    await asyncio.sleep(0.1)
+    await send_to_heltec(build_sync_next_msg_frame())
 
 def resolve_channel(target_str: str) -> Optional[int]:
     clean = target_str.strip().lstrip("#")
@@ -778,7 +780,7 @@ async def websocket_client_endpoint(websocket: WebSocket):
             "node_info": node_info,
             "channels": discovered_channels,
             "stats": stats,
-            "recent_messages": get_recent_messages(60),
+            "recent_messages": get_recent_messages(250),
             "recent_nodes": get_recent_heard_nodes(100)
         }
         await websocket.send_json(init_payload)

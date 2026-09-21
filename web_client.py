@@ -1290,7 +1290,22 @@ def get_web_client_html() -> str:
         let channels = { 0: "Public" };
         let nodeInfo = { name: "Buscate", freq_mhz: 869.618, bw_khz: 62.5, sf: 8, cr: 8, tx_power: 20 };
         let heardNodes = [];
-        let messages = [];
+        
+        function loadMessagesFromStorage() {
+            try {
+                const raw = localStorage.getItem("meshcore_room_messages");
+                if (raw) return JSON.parse(raw);
+            } catch(e) {}
+            return [];
+        }
+
+        function saveMessagesToStorage() {
+            try {
+                localStorage.setItem("meshcore_room_messages", JSON.stringify(messages.slice(-500)));
+            } catch(e) {}
+        }
+
+        let messages = loadMessagesFromStorage();
         let socket = null;
         let audioEnabled = true;
         let audioCtx = null;
@@ -1647,6 +1662,35 @@ def get_web_client_html() -> str:
         }
 
         // Render Channel Chips
+        async function fetchHistoryForChannel(channelName, channelIdx) {
+            try {
+                const res = await fetch(`/api/messages?limit=150&channel=${encodeURIComponent(channelName)}`);
+                if (res.ok) {
+                    const serverMsgs = await res.json();
+                    if (serverMsgs && serverMsgs.length > 0) {
+                        const existingKeys = new Set(messages.map(m => m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`));
+                        let added = 0;
+                        serverMsgs.forEach(m => {
+                            const key = m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`;
+                            if (!existingKeys.has(key)) {
+                                if (m.channel_idx === undefined || m.channel_idx === null) m.channel_idx = channelIdx;
+                                messages.push(m);
+                                existingKeys.add(key);
+                                added++;
+                            }
+                        });
+                        if (added > 0) {
+                            messages.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+                            saveMessagesToStorage();
+                            renderMessages();
+                        }
+                    }
+                }
+            } catch(e) {
+                console.warn("fetchHistory error:", e);
+            }
+        }
+
         function renderChannelsBar() {
             const bar = document.getElementById("channelsNavBar");
             bar.innerHTML = "";
@@ -1661,6 +1705,7 @@ def get_web_client_html() -> str:
                     document.getElementById("currentChannelName").textContent = `${name} [${idx}]`;
                     renderChannelsBar();
                     renderMessages();
+                    fetchHistoryForChannel(name, idx);
                 });
                 bar.appendChild(chip);
             });
@@ -1867,7 +1912,18 @@ def get_web_client_html() -> str:
                 isHeltecConnected = data.heltec_connected;
                 if (data.channels) channels = data.channels;
                 if (data.node_info) nodeInfo = Object.assign(nodeInfo, data.node_info);
-                if (data.recent_messages) messages = data.recent_messages;
+                if (data.recent_messages && data.recent_messages.length > 0) {
+                    const existingKeys = new Set(messages.map(m => m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`));
+                    data.recent_messages.forEach(m => {
+                        const key = m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`;
+                        if (!existingKeys.has(key)) {
+                            messages.push(m);
+                            existingKeys.add(key);
+                        }
+                    });
+                    messages.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+                    saveMessagesToStorage();
+                }
                 if (data.recent_nodes) heardNodes = data.recent_nodes;
                 updateHeader();
                 renderChannelsBar();
@@ -1890,8 +1946,13 @@ def get_web_client_html() -> str:
                 updateHeader();
                 populateSettingsInputs();
             } else if (data.type === "new_message") {
-                messages.push(data);
-                if (messages.length > 150) messages.shift();
+                const key = data.id ? `id_${data.id}` : `${data.timestamp}_${data.sender}_${data.content}`;
+                const exists = messages.some(m => (m.id ? `id_${m.id}` : `${m.timestamp}_${m.sender}_${m.content}`) === key);
+                if (!exists) {
+                    messages.push(data);
+                    if (messages.length > 500) messages.shift();
+                    saveMessagesToStorage();
+                }
                 renderMessages();
                 if (data.source === "LoRa Mesh") {
                     playChime("recv");
