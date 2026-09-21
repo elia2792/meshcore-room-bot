@@ -260,12 +260,16 @@ def save_message(source: str, sender: str, channel: str, content: str, snr: Opti
         print("DB save_message error:", e)
     return msg_id
 
-def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None):
+def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        if rtt_ms is not None:
+        if rtt_ms is not None and hops is not None:
+            cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ?, hops = ? WHERE id = ?", (ack_status, rtt_ms, hops, msg_id))
+        elif rtt_ms is not None:
             cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ? WHERE id = ?", (ack_status, rtt_ms, msg_id))
+        elif hops is not None:
+            cursor.execute("UPDATE messages SET ack_status = ?, hops = ? WHERE id = ?", (ack_status, hops, msg_id))
         else:
             cursor.execute("UPDATE messages SET ack_status = ? WHERE id = ?", (ack_status, msg_id))
         conn.commit()
@@ -1287,16 +1291,33 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                 elif code == 0x82 and len(payload) >= 5:
                     ack_code = struct.unpack("<I", payload[1:5])[0]
                     round_trip_ms = struct.unpack("<I", payload[5:9])[0] if len(payload) >= 9 else None
-                    print(f"LoRa ACK Confirmed: code={ack_code}, RTT={round_trip_ms}ms")
+                    
+                    hops = None
+                    if len(payload) >= 10 and payload[9] <= 15:
+                        hops = payload[9]
+                    elif round_trip_ms is not None:
+                        # Stima del numero di salti mesh basata sull'airtime LoRa (SF8, BW62.5kHz)
+                        if round_trip_ms < 750:
+                            hops = 0  # Diretto RF
+                        elif round_trip_ms < 1600:
+                            hops = 1  # 1 ripetitore
+                        elif round_trip_ms < 2800:
+                            hops = 2  # 2 salti
+                        else:
+                            hops = 3  # 3 o più salti
 
-                    # Update database for the most recent pending message
+                    hops_str = "Diretto RF (0 salti)" if hops == 0 else (f"{hops} salto" if hops == 1 else f"{hops} salti")
+                    rtt_str = f"{round_trip_ms} ms" if round_trip_ms is not None else "N/A"
+                    print(f"LoRa ACK Confirmed: code={ack_code}, RTT={rtt_str}, hops={hops_str}")
+
+                    # Update database for the most recent outgoing message
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
                         cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
-                            update_message_ack(last_m[0], "confirmed", round_trip_ms)
+                            update_message_ack(last_m[0], "confirmed", round_trip_ms, hops)
                         conn.close()
                     except Exception as e:
                         print("Error updating ACK:", e)
@@ -1305,8 +1326,18 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         "type": "message_ack",
                         "ack_code": ack_code,
                         "round_trip_ms": round_trip_ms,
+                        "hops": hops,
+                        "hops_str": hops_str,
                         "status": "confirmed"
                     })
+
+                    # Notifica Telegram di ricezione confermata
+                    await broadcast_telegram(
+                        f"✅ <b>[Conferma Ricezione Mesh • ACK]</b>\n"
+                        f"📡 Il tuo messaggio è stato ricevuto con successo da un nodo della rete!\n"
+                        f"• ⏱️ <b>Tempo Round-Trip:</b> {rtt_str}\n"
+                        f"• 📶 <b>Salti (Hop):</b> {hops_str}"
+                    )
 
                 # RESP_CODE_SENT = 6
                 elif code == 6 and len(payload) >= 5:
