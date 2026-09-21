@@ -798,14 +798,18 @@ async def websocket_client_endpoint(websocket: WebSocket):
                 ch_idx = int(data.get("channel_idx", 0))
                 text = str(data.get("text", "")).strip()
                 sender = str(data.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
-                client_id = data.get("client_id")
+                reply_to_sender = data.get("reply_to_sender")
+                reply_to_text = data.get("reply_to_text")
                 if text:
                     ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
                     msg_id = save_message("Web Client", sender, ch_name, text, ack_status="sent_to_radio", rtt_ms=None)
                     frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
                     sent = await send_to_heltec(frame)
 
-                    tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n👤 <b>{sender}</b>: {text}"
+                    if reply_to_sender:
+                        tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n↩️ <i>Risposta a @{reply_to_sender}</i>\n👤 <b>{sender}</b>: {text}"
+                    else:
+                        tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n👤 <b>{sender}</b>: {text}"
                     await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
 
                     await broadcast_to_browsers({
@@ -817,6 +821,8 @@ async def websocket_client_endpoint(websocket: WebSocket):
                         "channel": ch_name,
                         "channel_idx": ch_idx,
                         "content": text,
+                        "reply_to_sender": reply_to_sender,
+                        "reply_to_text": reply_to_text,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "snr": None,
                         "hops": 0,

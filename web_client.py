@@ -378,6 +378,95 @@ def get_web_client_html() -> str:
             100% { transform: scale(1.0); box-shadow: 0 0 10px rgba(16, 185, 129, 0.25); }
         }
 
+        .reply-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(30, 41, 59, 0.95);
+            border-left: 3px solid var(--primary);
+            border-radius: 8px;
+            padding: 7px 12px;
+            margin-bottom: 2px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+            animation: fadeInReply 0.15s ease-out;
+        }
+
+        @keyframes fadeInReply {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .reply-bar-left {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            overflow: hidden;
+            flex: 1;
+        }
+
+        .reply-bar-title {
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .reply-bar-snippet {
+            font-size: 0.74rem;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 270px;
+        }
+
+        .reply-bar-close {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 1.15rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            line-height: 1;
+            border-radius: 4px;
+            transition: color 0.15s;
+        }
+
+        .reply-bar-close:hover {
+            color: #ef4444;
+        }
+
+        .msg-quote {
+            background: rgba(0, 0, 0, 0.28);
+            border-left: 3px solid var(--primary);
+            border-radius: 4px;
+            padding: 4px 8px;
+            margin-bottom: 6px;
+            font-size: 0.76rem;
+            line-height: 1.3;
+        }
+
+        .msg-quote-sender {
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 0.72rem;
+        }
+
+        .msg-quote-text {
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .msg-bubble-wrap {
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            user-select: text;
+        }
+
         .chat-input-container {
             background: var(--surface);
             border-top: 1px solid var(--border);
@@ -1042,6 +1131,15 @@ def get_web_client_html() -> str:
 
             <!-- Input Bar -->
             <div class="chat-input-container">
+                <!-- Reply Bar -->
+                <div id="replyBar" class="reply-bar" style="display: none;">
+                    <div class="reply-bar-left">
+                        <div class="reply-bar-title">↩️ Rispondi a <span id="replyToSender"></span></div>
+                        <div id="replyToSnippet" class="reply-bar-snippet"></div>
+                    </div>
+                    <button id="cancelReplyBtn" class="reply-bar-close" title="Annulla risposta">✕</button>
+                </div>
+
                 <div class="chat-input-row">
                     <input type="text" id="messageInput" placeholder="Scrivi un messaggio LoRa..." autocomplete="off" />
                     <button id="sendBtn" class="btn-send" title="Trasmetti messaggio via radio">➤</button>
@@ -1336,6 +1434,32 @@ def get_web_client_html() -> str:
         let leafletMap = null;
         let mapMarkers = [];
         let localNodeMarker = null;
+        let currentReplyTarget = null;
+
+        function setReplyTarget(m) {
+            currentReplyTarget = m;
+            const replyBar = document.getElementById("replyBar");
+            const senderSpan = document.getElementById("replyToSender");
+            const snippetSpan = document.getElementById("replyToSnippet");
+            if (replyBar && senderSpan && snippetSpan) {
+                const sName = m.sender || (m.source === "Web Client" ? "Tu" : "Nodo Radio");
+                senderSpan.textContent = sName;
+                snippetSpan.textContent = (m.content || "").substring(0, 60);
+                replyBar.style.display = "flex";
+                if (navigator.vibrate) {
+                    try { navigator.vibrate(50); } catch(e) {}
+                }
+                const input = document.getElementById("messageInput");
+                input.focus();
+                showToast(`↩️ Rispondi a ${sName}`, true);
+            }
+        }
+
+        function clearReplyTarget() {
+            currentReplyTarget = null;
+            const replyBar = document.getElementById("replyBar");
+            if (replyBar) replyBar.style.display = "none";
+        }
 
         // Sound Synthesizer
         function playChime(type = "recv") {
@@ -1774,8 +1898,54 @@ def get_web_client_html() -> str:
                 // Bubble Body
                 const bubble = document.createElement("div");
                 bubble.className = "msg-bubble";
-                bubble.textContent = m.content;
+
+                // Render quoted reply if present
+                if (m.reply_to_sender) {
+                    const quoteDiv = document.createElement("div");
+                    quoteDiv.className = "msg-quote";
+                    quoteDiv.innerHTML = `<div class="msg-quote-sender">↩️ ${escapeHtml(m.reply_to_sender)}</div><div class="msg-quote-text">${escapeHtml(m.reply_to_text || '')}</div>`;
+                    bubble.appendChild(quoteDiv);
+                }
+
+                const contentSpan = document.createElement("span");
+                contentSpan.textContent = m.content;
+                bubble.appendChild(contentSpan);
                 wrap.appendChild(bubble);
+
+                // Long-press and click listeners to reply directly
+                let pressTimer = null;
+                let touchMoved = false;
+
+                wrap.addEventListener("touchstart", (e) => {
+                    touchMoved = false;
+                    pressTimer = setTimeout(() => {
+                        if (!touchMoved) {
+                            setReplyTarget(m);
+                        }
+                    }, 400);
+                }, { passive: true });
+
+                wrap.addEventListener("touchmove", () => {
+                    touchMoved = true;
+                    if (pressTimer) clearTimeout(pressTimer);
+                }, { passive: true });
+
+                wrap.addEventListener("touchend", () => {
+                    if (pressTimer) clearTimeout(pressTimer);
+                });
+
+                wrap.addEventListener("touchcancel", () => {
+                    if (pressTimer) clearTimeout(pressTimer);
+                });
+
+                wrap.addEventListener("contextmenu", (e) => {
+                    e.preventDefault();
+                    setReplyTarget(m);
+                });
+
+                wrap.addEventListener("dblclick", () => {
+                    setReplyTarget(m);
+                });
 
                 // Footer (Time, Signal/Hops, ACK)
                 const footer = document.createElement("div");
@@ -2059,6 +2229,17 @@ def get_web_client_html() -> str:
             const btn = document.getElementById("sendBtn");
             btn.disabled = true;
 
+            let finalLoRaText = text;
+            let replySender = null;
+            let replyText = null;
+
+            if (currentReplyTarget) {
+                replySender = currentReplyTarget.sender || (currentReplyTarget.source === "Web Client" ? "Tu" : "Nodo Radio");
+                replyText = currentReplyTarget.content || "";
+                finalLoRaText = `@[${replySender}] ${text}`;
+                clearReplyTarget();
+            }
+
             const clientMsgId = "msg_" + Date.now();
             const chName = channels[activeChannelIdx] || `Canale ${activeChannelIdx}`;
             const optimisticMsg = {
@@ -2068,6 +2249,8 @@ def get_web_client_html() -> str:
                 channel: chName,
                 channel_idx: activeChannelIdx,
                 content: text,
+                reply_to_sender: replySender,
+                reply_to_text: replyText,
                 timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
                 snr: null,
                 hops: 0,
@@ -2081,9 +2264,11 @@ def get_web_client_html() -> str:
                 socket.send(JSON.stringify({
                     action: "send_message",
                     channel_idx: activeChannelIdx,
-                    text: text,
+                    text: finalLoRaText,
                     sender: sender,
-                    client_id: clientMsgId
+                    client_id: clientMsgId,
+                    reply_to_sender: replySender,
+                    reply_to_text: replyText
                 }));
                 input.value = "";
                 input.focus();
@@ -2097,8 +2282,10 @@ def get_web_client_html() -> str:
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             channel_idx: activeChannelIdx,
-                            text: text,
-                            sender: sender
+                            text: finalLoRaText,
+                            sender: sender,
+                            reply_to_sender: replySender,
+                            reply_to_text: replyText
                         })
                     });
                     if (resp.ok) {
@@ -2116,6 +2303,10 @@ def get_web_client_html() -> str:
         }
 
         document.getElementById("sendBtn").addEventListener("click", sendMessage);
+        document.getElementById("cancelReplyBtn").addEventListener("click", (e) => {
+            e.stopPropagation();
+            clearReplyTarget();
+        });
         document.getElementById("messageInput").addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
