@@ -1344,8 +1344,11 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     )
 
                 # RESP_CODE_SENT = 6
-                elif code == 6 and len(payload) >= 5:
-                    expected_ack = struct.unpack("<I", payload[1:5])[0]
+                elif code == 6 and len(payload) >= 2:
+                    route_flag = payload[1] if len(payload) >= 2 else 0
+                    expected_ack = struct.unpack("<I", payload[2:6])[0] if len(payload) >= 6 else None
+                    timeout_ms = struct.unpack("<I", payload[6:10])[0] if len(payload) >= 10 else 5000
+                    print(f"LoRa Packet On Air: route_flag={route_flag}, expected_ack={expected_ack}, timeout={timeout_ms}ms")
                     await broadcast_to_browsers({
                         "type": "message_in_flight",
                         "expected_ack": expected_ack,

@@ -346,20 +346,36 @@ def get_web_client_html() -> str:
         .ack-indicator {
             display: inline-flex;
             align-items: center;
-            gap: 3px;
+            gap: 4px;
+            font-size: 0.74rem;
+            padding: 2px 7px;
+            border-radius: 6px;
             font-weight: 600;
+            letter-spacing: 0.2px;
         }
 
         .ack-indicator.pending {
-            color: var(--ack-sent);
+            color: #94a3b8;
+            background: rgba(148, 163, 184, 0.1);
         }
 
         .ack-indicator.air {
-            color: var(--ack-air);
+            color: #38bdf8;
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.3);
         }
 
         .ack-indicator.confirmed {
-            color: var(--ack-ok);
+            color: #10b981;
+            background: rgba(16, 185, 129, 0.18);
+            border: 1px solid rgba(16, 185, 129, 0.4);
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+            animation: pulseRecapito 1.2s ease-out;
+        }
+
+        @keyframes pulseRecapito {
+            0% { transform: scale(1.18); box-shadow: 0 0 16px rgba(16, 185, 129, 0.7); }
+            100% { transform: scale(1.0); box-shadow: 0 0 10px rgba(16, 185, 129, 0.25); }
         }
 
         .chat-input-container {
@@ -1340,14 +1356,18 @@ def get_web_client_html() -> str:
                     osc.start(now);
                     osc.stop(now + 0.35);
                 } else if (type === "ack") {
-                    // Double high chirp for ACK confirmation
-                    osc.type = "triangle";
-                    osc.frequency.setValueAtTime(987.77, now); // B5
-                    osc.frequency.setValueAtTime(1318.51, now + 0.07); // E6
-                    gain.gain.setValueAtTime(0.14, now);
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                    // Triple rising chime for delivery ACK confirmation
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(659.25, now); // E5
+                    osc.frequency.setValueAtTime(880.00, now + 0.07); // A5
+                    osc.frequency.setValueAtTime(1318.51, now + 0.15); // E6
+                    gain.gain.setValueAtTime(0.18, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
                     osc.start(now);
-                    osc.stop(now + 0.3);
+                    osc.stop(now + 0.45);
+                    if (navigator.vibrate) {
+                        try { navigator.vibrate([70, 30, 70]); } catch(e) {}
+                    }
                 }
             } catch(e) {
                 console.warn("Audio chime error:", e);
@@ -1768,14 +1788,16 @@ def get_web_client_html() -> str:
                 if (isOut) {
                     const status = m.ack_status || (m.sent_to_radio ? "sent_to_radio" : "pending");
                     if (status === "confirmed") {
-                        const rtt = m.rtt_ms ? ` (${m.rtt_ms}ms)` : "";
+                        const rtt = m.rtt_ms ? ` • ${m.rtt_ms}ms` : "";
                         let hopInfo = "";
                         if (m.hops !== undefined && m.hops !== null) {
                             hopInfo = m.hops === 0 ? " • Diretto RF" : ` • ${m.hops} salti`;
                         }
-                        details += `<span class="ack-indicator confirmed" style="color: var(--primary); font-weight: 600;">✓✓ Ricevuto da nodo mesh${hopInfo}${rtt}</span>`;
-                    } else if (status === "air" || status === "sent_to_radio") {
+                        details += `<span class="ack-indicator confirmed">✓✓ RECAPITATO${hopInfo}${rtt}</span>`;
+                    } else if (status === "air") {
                         details += `<span class="ack-indicator air">✓ In etere LoRa...</span>`;
+                    } else if (status === "sent_to_radio") {
+                        details += `<span class="ack-indicator pending">✓ Inviato alla radio</span>`;
                     } else {
                         details += `<span class="ack-indicator pending">⏳ In trasmissione...</span>`;
                     }
@@ -1979,11 +2001,12 @@ def get_web_client_html() -> str:
                         break;
                     }
                 }
+                saveMessagesToStorage();
                 renderMessages();
                 playChime("ack");
                 const rttStr = data.round_trip_ms ? ` in ${data.round_trip_ms}ms` : "";
                 const hopsStr = data.hops_str ? ` (${data.hops_str})` : (data.hops !== undefined && data.hops !== null ? (data.hops === 0 ? " (Diretto RF)" : ` (${data.hops} salti)`) : "");
-                showToast(`✅ Ricevuto da nodo mesh${hopsStr}${rttStr}!`, true);
+                showToast(`🟢 RECAPITATO! Confermato da nodo mesh${hopsStr}${rttStr}`, true);
             } else if (data.type === "nodes") {
                 heardNodes = data.nodes;
                 renderNodes();
