@@ -11,7 +11,13 @@ def get_web_client_html() -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>MeshCore Web Client</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+    <link rel="icon" href="/api/icon.svg">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#10b981">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="MeshCore">
+    <link rel="apple-touch-icon" href="/api/icon.svg">
     <!-- Leaflet CSS & JS for Interactive LoRa Map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -1131,6 +1137,103 @@ def get_web_client_html() -> str:
             font-size: 0.8rem;
             color: var(--text-muted);
         }
+
+        /* Search Bar in Chat */
+        .chat-search-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #0b111e;
+            border-bottom: 1px solid var(--border);
+            padding: 6px 14px;
+            flex-shrink: 0;
+        }
+        .chat-search-bar input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-size: 0.82rem;
+            outline: none;
+        }
+        .chat-search-bar input::placeholder {
+            color: var(--text-dim);
+        }
+        .clear-search-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 0.82rem;
+            padding: 2px 6px;
+        }
+
+        /* Radar Proximity Alert Banner */
+        .radar-alert-banner {
+            background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.18));
+            border: 1px solid #ef4444;
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin: 10px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            animation: radarPulse 1.8s infinite;
+        }
+        @keyframes radarPulse {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+
+        /* 24h Traffic Chart */
+        .traffic-chart-container {
+            width: 100%;
+            height: 150px;
+            background: #090d16;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            padding: 12px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            position: relative;
+            margin-top: 8px;
+        }
+        .traffic-bars-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 3px;
+            height: 105px;
+            width: 100%;
+        }
+        .traffic-bar-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100%;
+            justify-content: flex-end;
+            cursor: pointer;
+            position: relative;
+        }
+        .traffic-bar-fill {
+            width: 100%;
+            background: linear-gradient(to top, var(--primary), #38bdf8);
+            border-radius: 3px 3px 0 0;
+            min-height: 2px;
+            transition: height 0.3s ease;
+        }
+        .traffic-bar-col:hover .traffic-bar-fill {
+            background: #f59e0b;
+        }
+        .traffic-bar-hour {
+            font-size: 0.58rem;
+            color: var(--text-dim);
+            margin-top: 4px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -1152,6 +1255,7 @@ def get_web_client_html() -> str:
             </div>
         </div>
         <div class="header-actions">
+            <button id="notifToggleBtn" class="btn-icon" title="Attiva Notifiche Push Browser" onclick="togglePushNotifications()">📲 App</button>
             <button id="audioToggleBtn" class="btn-icon" title="Attiva/Disattiva Suoni">🔔</button>
             <a href="https://t.me/Meshcoreeliaxs_bot" target="_blank" class="btn-icon" title="Apri Telegram">✈️ Telegram</a>
         </div>
@@ -1165,6 +1269,13 @@ def get_web_client_html() -> str:
             <!-- Channel Selection Chips -->
             <div id="channelsNavBar" class="channels-nav-bar">
                 <!-- Dynamically filled -->
+            </div>
+
+            <!-- Live Message Search Bar -->
+            <div class="chat-search-bar" id="chatSearchBar">
+                <span style="font-size:0.85rem; color:var(--text-dim);">🔍</span>
+                <input type="text" id="chatSearchInput" placeholder="Cerca parole o nominativi nei messaggi..." oninput="handleChatSearch()" autocomplete="off"/>
+                <button id="clearSearchBtn" class="clear-search-btn" onclick="clearChatSearch()" style="display:none;" title="Azzera ricerca">✕</button>
             </div>
 
             <!-- Messages Log -->
@@ -1192,7 +1303,10 @@ def get_web_client_html() -> str:
                 </div>
                 <div class="chat-tools-row">
                     <span>Canale: <b id="currentChannelName" style="color: var(--primary);">Public [0]</b></span>
-                    <span>Operatore: <input type="text" id="senderNameInput" value="Web-Operatore" style="background:transparent; border:none; color:var(--accent-blue); font-weight:600; width:110px; text-align:right;" /></span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <button id="shareLocationBtn" class="btn-icon" style="padding:2px 8px; font-size:0.75rem; color:var(--accent-blue);" onclick="shareGpsLocationInChat()" title="Invia coordinate GPS correnti nel canale LoRa">📍 Invia GPS</button>
+                        <span>Operatore: <input type="text" id="senderNameInput" value="Web-Operatore" style="background:transparent; border:none; color:var(--accent-blue); font-weight:600; width:110px; text-align:right;" /></span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1391,6 +1505,43 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
+                <!-- Auto-Responder / Echo Test Card -->
+                <div class="settings-card">
+                    <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:8px;">
+                        <div class="settings-card-title" style="border-bottom:none; padding-bottom:0; margin:0;">
+                            🤖 Auto-Responder Radio / Echo Test
+                        </div>
+                        <span id="autoRespStatusBadge" class="status-badge online" style="font-size:0.75rem;">ATTIVO</span>
+                    </div>
+                    <p style="font-size:0.8rem; color:var(--text-muted); margin-top:8px;">
+                        Risponde automaticamente a comandi radio (<code>!ping</code>, <code>!test</code>, <code>!snr</code>) calcolando SNR locale ed hop RF.
+                        Include protezione anti-loop con cooldown di 60 secondi per ciascun nodo.
+                    </p>
+                    <div style="display:flex; gap:10px; margin-top:10px; align-items:center;">
+                        <button id="toggleAutoRespBtn" class="btn-action btn-secondary" style="flex:1;" onclick="toggleAutoResponder()">
+                            🔄 Attiva / Disattiva Auto-Responder
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 24h Radio Traffic Card -->
+                <div class="settings-card">
+                    <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:8px;">
+                        <div class="settings-card-title" style="border-bottom:none; padding-bottom:0; margin:0;">
+                            📈 Traffico Radio 24 Ore (Attività Mesh)
+                        </div>
+                        <button class="btn-icon" style="font-size:0.75rem; padding:3px 8px;" onclick="fetchHourlyTraffic()">🔄 Aggiorna</button>
+                    </div>
+                    <div id="trafficChartBox" class="traffic-chart-container">
+                        <div id="trafficBarsRow" class="traffic-bars-row"></div>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--text-dim); margin-top:6px;">
+                        <span>24h fa</span>
+                        <span id="trafficTotalSummary">Caricamento traffico...</span>
+                        <span>Adesso</span>
+                    </div>
+                </div>
+
                 <!-- Device Maintenance -->
                 <div class="settings-card">
                     <div class="settings-card-title">🛠️ Strumenti Dispositivo</div>
@@ -1512,6 +1663,8 @@ def get_web_client_html() -> str:
         let isHeltecConnected = false;
         let leafletMap = null;
         let mapMarkers = [];
+        let mapTracks = [];
+        let stationCoverageCircle = null;
         let localNodeMarker = null;
         let currentReplyTarget = null;
         let nodesFilter = 'all';
@@ -1600,9 +1753,195 @@ def get_web_client_html() -> str:
                     if (navigator.vibrate) {
                         try { navigator.vibrate([70, 30, 70]); } catch(e) {}
                     }
+                } else if (type === "radar") {
+                    // Sonar / Radar high ping for direct RF detection
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(987.77, now); // B5
+                    osc.frequency.exponentialRampToValueAtTime(1479.98, now + 0.12); // F#6
+                    gain.gain.setValueAtTime(0.22, now);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+                    osc.start(now);
+                    osc.stop(now + 0.55);
+                    if (navigator.vibrate) {
+                        try { navigator.vibrate([120, 60, 120, 60, 200]); } catch(e) {}
+                    }
                 }
             } catch(e) {
                 console.warn("Audio chime error:", e);
+            }
+        }
+
+        // PWA Service Worker & Push Notifications
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW reg error:', err));
+            });
+        }
+
+        function togglePushNotifications() {
+            if (!("Notification" in window)) {
+                showToast("Notifiche non supportate dal tuo browser.", false);
+                return;
+            }
+            if (Notification.permission === "granted") {
+                showToast("🔔 Notifiche push browser già attive!", true);
+                new Notification("MeshCore Web App", {
+                    body: "Le notifiche LoRa in tempo reale sono attive sul tuo dispositivo.",
+                    icon: "/api/icon.svg"
+                });
+            } else if (Notification.permission !== "denied") {
+                Notification.requestPermission().then(permission => {
+                    if (permission === "granted") {
+                        showToast("🔔 Notifiche push attivate con successo!", true);
+                        new Notification("MeshCore Web App", {
+                            body: "Notifiche attivate! Riceverai avvisi quando arrivano messaggi o nodi vicini.",
+                            icon: "/api/icon.svg"
+                        });
+                    } else {
+                        showToast("Notifiche rifiutate dal browser.", false);
+                    }
+                });
+            } else {
+                showToast("Notifiche bloccate nelle impostazioni del browser.", false);
+            }
+        }
+
+        // Chat Live Search Filter
+        let chatSearchQuery = "";
+
+        function handleChatSearch() {
+            const input = document.getElementById("chatSearchInput");
+            const clearBtn = document.getElementById("clearSearchBtn");
+            if (!input) return;
+            chatSearchQuery = input.value.trim().toLowerCase();
+            if (clearBtn) {
+                clearBtn.style.display = chatSearchQuery ? "inline-block" : "none";
+            }
+            renderMessages();
+        }
+
+        function clearChatSearch() {
+            const input = document.getElementById("chatSearchInput");
+            const clearBtn = document.getElementById("clearSearchBtn");
+            if (input) input.value = "";
+            if (clearBtn) clearBtn.style.display = "none";
+            chatSearchQuery = "";
+            renderMessages();
+        }
+
+        // Share Current GPS in Chat
+        function shareGpsLocationInChat() {
+            if (!navigator.geolocation) {
+                showToast("Geolocalizzazione non supportata.", false);
+                return;
+            }
+            showToast("Rilevamento posizione GPS...", true);
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    const lat = pos.coords.latitude.toFixed(5);
+                    const lon = pos.coords.longitude.toFixed(5);
+                    const mapLink = `https://maps.google.com/?q=${lat},${lon}`;
+                    const input = document.getElementById("messageInput");
+                    input.value = `📍 GPS: ${lat}, ${lon} (${mapLink})`;
+                    input.focus();
+                    showToast("Coordinate inserite nella barra chat! Premi Invia per trasmettere.", true);
+                },
+                (err) => {
+                    showToast(`Errore GPS: ${err.message}`, false);
+                },
+                { enableHighAccuracy: true, timeout: 8000 }
+            );
+        }
+
+        // Direct Message helper
+        function openDirectMessage(nodeName) {
+            const input = document.getElementById("messageInput");
+            if (!input) return;
+            input.value = `@${nodeName} `;
+            document.querySelector('[data-tab="tabMessages"]').click();
+            input.focus();
+            showToast(`Modalità messaggio diretto per ${nodeName}`, true);
+        }
+
+        function escapeJsString(str) {
+            if (!str) return "";
+            return String(str).replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        }
+
+        // 24h Radio Traffic & Auto-Responder Status
+        async function fetchHourlyTraffic() {
+            try {
+                const resp = await fetch("/api/stats/hourly");
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const hourly = data.hourly || [];
+                const container = document.getElementById("trafficBarsRow");
+                if (!container) return;
+                container.innerHTML = "";
+
+                const maxCount = Math.max(...hourly.map(h => h.count), 1);
+                let totalPackets = 0;
+
+                hourly.forEach(item => {
+                    totalPackets += item.count;
+                    const barCol = document.createElement("div");
+                    barCol.className = "traffic-bar-col";
+                    const heightPercent = Math.max(Math.round((item.count / maxCount) * 100), item.count > 0 ? 8 : 2);
+                    barCol.title = `Ore ${item.hour}:00 - ${item.count} pacchetti`;
+
+                    barCol.innerHTML = `
+                        <div class="traffic-bar-fill" style="height:${heightPercent}%;"></div>
+                        <div class="traffic-bar-hour">${item.hour % 6 === 0 ? item.hour : ''}</div>
+                    `;
+                    container.appendChild(barCol);
+                });
+
+                const summaryEl = document.getElementById("trafficTotalSummary");
+                if (summaryEl) summaryEl.textContent = `Totale: ${totalPackets} pacchetti (24h)`;
+            } catch(e) {
+                console.warn("Traffic fetch error:", e);
+            }
+        }
+
+        async function fetchAutoResponderStatus() {
+            try {
+                const resp = await fetch("/api/autoresponder");
+                if (!resp.ok) return;
+                const data = await resp.json();
+                updateAutoResponderBadge(data.auto_responder_enabled);
+            } catch(e) {}
+        }
+
+        function updateAutoResponderBadge(enabled) {
+            const badge = document.getElementById("autoRespStatusBadge");
+            const btn = document.getElementById("toggleAutoRespBtn");
+            if (!badge || !btn) return;
+            if (enabled) {
+                badge.className = "status-badge online";
+                badge.textContent = "ATTIVO";
+                btn.textContent = "⏹️ Disattiva Auto-Responder";
+            } else {
+                badge.className = "status-badge offline";
+                badge.textContent = "DISATTIVATO";
+                btn.textContent = "▶️ Attiva Auto-Responder";
+            }
+        }
+
+        async function toggleAutoResponder() {
+            try {
+                const currResp = await fetch("/api/autoresponder");
+                const currData = await currResp.json();
+                const newState = !currData.auto_responder_enabled;
+                const postResp = await fetch("/api/autoresponder", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ enabled: newState })
+                });
+                const postData = await postResp.json();
+                updateAutoResponderBadge(postData.auto_responder_enabled);
+                showToast(`Auto-responder radio ${postData.auto_responder_enabled ? 'attivato' : 'disattivato'}!`, true);
+            } catch(e) {
+                showToast("Errore aggiornamento auto-responder", false);
             }
         }
 
@@ -1674,9 +2013,15 @@ def get_web_client_html() -> str:
         function renderMapMarkers() {
             if (!leafletMap || typeof L === "undefined") return;
 
-            // Clear old markers
+            // Clear old markers, tracks and circles
             mapMarkers.forEach(m => leafletMap.removeLayer(m));
             mapMarkers = [];
+            mapTracks.forEach(t => leafletMap.removeLayer(t));
+            mapTracks = [];
+            if (stationCoverageCircle) {
+                leafletMap.removeLayer(stationCoverageCircle);
+                stationCoverageCircle = null;
+            }
             if (localNodeMarker) {
                 leafletMap.removeLayer(localNodeMarker);
                 localNodeMarker = null;
@@ -1707,6 +2052,23 @@ def get_web_client_html() -> str:
                     </div>
                 `);
                 bounds.push([myLat, myLon]);
+
+                // Station Estimated RF Coverage Circle (~25 km)
+                stationCoverageCircle = L.circle([myLat, myLon], {
+                    radius: 25000,
+                    color: '#10b981',
+                    fillColor: '#10b981',
+                    fillOpacity: 0.05,
+                    weight: 1.5,
+                    dashArray: '6, 6'
+                }).addTo(leafletMap);
+                stationCoverageCircle.bindPopup(`
+                    <div style="font-size:0.85rem; line-height:1.4;">
+                        <b style="color:#10b981;">📡 Raggio di Copertura RF Stimato (~25 km)</b><br>
+                        <span>Stazione: <b>${escapeHtml(myName)}</b></span><br>
+                        <small style="color:#94a3b8;">Portata ottica/diretta tipica per antenna stazione Buscate</small>
+                    </div>
+                `);
             }
 
             // Add heard nodes markers
@@ -1737,6 +2099,31 @@ def get_web_client_html() -> str:
                     bounds.push([nLat, nLon]);
                 }
             });
+
+            // Fetch and render GPS historical tracks
+            fetch("/api/nodes/tracks")
+                .then(r => r.json())
+                .then(data => {
+                    if (!data || !data.tracks || !leafletMap) return;
+                    const colors = ["#38bdf8", "#a855f7", "#f59e0b", "#ec4899", "#10b981", "#06b6d4"];
+                    let cIdx = 0;
+                    for (const [nodeName, pts] of Object.entries(data.tracks)) {
+                        if (pts && pts.length > 1) {
+                            const latlngs = pts.map(p => [p.lat, p.lon]);
+                            const trackColor = colors[cIdx % colors.length];
+                            cIdx++;
+                            const poly = L.polyline(latlngs, {
+                                color: trackColor,
+                                weight: 3,
+                                opacity: 0.8,
+                                dashArray: '4, 4'
+                            }).addTo(leafletMap);
+                            poly.bindTooltip(`📍 Traccia GPS: <b>${escapeHtml(nodeName)}</b> (${pts.length} rilevamenti)`, { sticky: true });
+                            mapTracks.push(poly);
+                        }
+                    }
+                })
+                .catch(() => {});
 
             document.getElementById("mapNodesCount").textContent = `Nodi con coordinate GPS: ${validCoordsCount}`;
 
@@ -1997,7 +2384,7 @@ def get_web_client_html() -> str:
             const chTitle = activeChannelIdx === -1 ? "🌐 Tutti i Canali" : `Canale [${activeChannelIdx}] ${channels[activeChannelIdx] || ""}`;
             container.innerHTML = `<div class="chat-date-separator"><span>Oggi • ${chTitle}</span></div>`;
 
-            const filtered = activeChannelIdx === -1 ? messages : messages.filter(m => {
+            let filtered = activeChannelIdx === -1 ? messages : messages.filter(m => {
                 if (m.channel_idx !== undefined && m.channel_idx !== null) {
                     return Number(m.channel_idx) === Number(activeChannelIdx);
                 }
@@ -2005,10 +2392,21 @@ def get_web_client_html() -> str:
                 return m.channel === chName || m.channel === `Canale ${activeChannelIdx}` || m.channel === `Canale #${activeChannelIdx}`;
             });
 
+            if (chatSearchQuery) {
+                filtered = filtered.filter(m => {
+                    const c = (m.content || "").toLowerCase();
+                    const s = (m.sender || "").toLowerCase();
+                    return c.includes(chatSearchQuery) || s.includes(chatSearchQuery);
+                });
+                container.innerHTML = `<div class="chat-date-separator"><span>🔍 Risultati per "${escapeHtml(chatSearchQuery)}" (${filtered.length} trovati)</span></div>`;
+            }
+
             if (filtered.length === 0) {
                 const empty = document.createElement("div");
                 empty.style.cssText = "text-align: center; color: var(--text-dim); margin-top: 40px; font-size: 0.85rem;";
-                empty.innerHTML = `Nessun messaggio su questo canale.<br>Invia un messaggio per trasmettere via radio LoRa.`;
+                empty.innerHTML = chatSearchQuery
+                    ? `Nessun messaggio trovato per "${escapeHtml(chatSearchQuery)}".<br><button onclick="clearChatSearch()" class="btn-icon" style="margin-top:8px;">Azzera Ricerca</button>`
+                    : `Nessun messaggio su questo canale.<br>Invia un messaggio per trasmettere via radio LoRa.`;
                 container.appendChild(empty);
                 return;
             }
@@ -2183,6 +2581,7 @@ def get_web_client_html() -> str:
                     </div>
                     <div class="node-actions-col">
                         <span class="node-badge">${escapeHtml(n.last_channel || 'Radio')}</span>
+                        <button class="btn-icon" style="padding:3px 8px; font-size:0.7rem; color:var(--accent-blue);" onclick="openDirectMessage('${escapeJsString(n.node_name)}')">💬 DM</button>
                         ${n.lat && n.lon ? `<a href="https://www.openstreetmap.org/?mlat=${n.lat}&mlon=${n.lon}#map=14/${n.lat}/${n.lon}" target="_blank" class="btn-icon" style="padding:3px 8px; font-size:0.7rem;">Mappa</a>` : ''}
                     </div>
                 `;
@@ -2326,6 +2725,14 @@ def get_web_client_html() -> str:
                 if (data.source === "LoRa Mesh") {
                     playChime("recv");
                     showToast(`Nuovo messaggio LoRa su [${data.channel}]: ${data.content.substring(0, 40)}`, true);
+                    if (window.Notification && Notification.permission === "granted") {
+                        try {
+                            new Notification(`LoRa [${data.channel || 'Mesh'}]: ${data.sender || 'Radio'}`, {
+                                body: data.content || '',
+                                icon: "/api/icon.svg"
+                            });
+                        } catch(e) {}
+                    }
                 }
             } else if (data.type === "message_in_flight") {
                 // Sent to radio, in the air
@@ -2354,7 +2761,21 @@ def get_web_client_html() -> str:
                 playChime("ack");
                 const hops = (data.hops !== undefined && data.hops !== null) ? decodeHops(data.hops) : null;
                 const hopsStr = data.hops_str ? ` (${data.hops_str})` : (hops !== null ? (hops === 0 ? " (🎯 Diretto RF)" : ` (🔀 ${hops} salti)`) : "");
+                const rttStr = data.round_trip_ms ? ` (${data.round_trip_ms} ms)` : "";
                 showToast(`🟢 RECAPITATO! Confermato da nodo mesh${hopsStr}${rttStr}`, true);
+            } else if (data.type === "radar_alert") {
+                playChime("radar");
+                const nName = data.node_name || "Nodo Diretto";
+                const snrVal = (data.snr !== undefined && data.snr !== null) ? `${data.snr > 0 ? '+' : ''}${Number(data.snr).toFixed(1)} dB` : "N/A";
+                showToast(`🚨 RADAR RF: Rilevato NUOVO NODO DIRETTO (0 salti): ${nName} (SNR: ${snrVal})!`, true);
+                if (window.Notification && Notification.permission === "granted") {
+                    try {
+                        new Notification("🚨 RADAR RF - Nuovo Nodo Diretto!", {
+                            body: `Rilevato ${nName} a 0 salti RF (SNR: ${snrVal})!`,
+                            icon: "/api/icon.svg"
+                        });
+                    } catch(e) {}
+                }
             } else if (data.type === "nodes") {
                 heardNodes = data.nodes;
                 renderNodes();
@@ -2733,6 +3154,8 @@ def get_web_client_html() -> str:
         // Init
         renderChannelsBar();
         connectWebSocket();
+        fetchHourlyTraffic();
+        fetchAutoResponderStatus();
     </script>
 </body>
 </html>"""

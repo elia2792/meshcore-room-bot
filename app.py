@@ -14,7 +14,7 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 import httpx
 from web_client import get_web_client_html
 
@@ -140,6 +140,20 @@ def init_db():
             PRIMARY KEY(chat_id, lora_channel_idx)
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS node_gps_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_name TEXT,
+            lat REAL,
+            lon REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_gps_name ON node_gps_history(node_name)")
+    except Exception:
+        pass
+
     # Sanitize existing distorted hop counts from earlier MeshCore path_len bug
     try:
         cursor.execute("UPDATE heard_nodes SET last_hops = (last_hops & 63) WHERE last_hops > 63 AND last_hops != 255")
@@ -151,6 +165,128 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+# ── Radar RF & Auto-Responder Global State ─────────────────────────────────────
+AUTO_RESPONDER_ENABLED = True
+auto_responder_cooldown = {}
+direct_node_alert_cache = set()
+
+def record_node_gps(node_name: str, lat: float, lon: float):
+    if not node_name or lat is None or lon is None:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT lat, lon FROM node_gps_history WHERE node_name = ? ORDER BY id DESC LIMIT 1", (node_name,))
+        prev = cursor.fetchone()
+        if not prev or abs(prev[0] - lat) > 0.0001 or abs(prev[1] - lon) > 0.0001:
+            cursor.execute("INSERT INTO node_gps_history (node_name, lat, lon) VALUES (?, ?, ?)", (node_name, lat, lon))
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        print("DB record_node_gps error:", e)
+
+def get_all_gps_tracks() -> dict:
+    tracks = {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT node_name, lat, lon, timestamp FROM node_gps_history ORDER BY id ASC")
+        for row in cursor.fetchall():
+            name, lat, lon, ts = row[0], row[1], row[2], row[3]
+            if name not in tracks:
+                tracks[name] = []
+            tracks[name].append({"lat": lat, "lon": lon, "time": ts})
+        conn.close()
+    except Exception as e:
+        print("DB get_all_gps_tracks error:", e)
+    return tracks
+
+def check_and_alert_direct_node(sender_name: str, snr: Optional[float], hops: int) -> bool:
+    if hops != 0:
+        return False
+    if not sender_name or sender_name in ("Nodo Radio", "Unknown", "Utente", "Web-Operatore", "Telegram", "Echo Buscate"):
+        return False
+    if sender_name in direct_node_alert_cache:
+        return False
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_hops, packets_count FROM heard_nodes WHERE node_name = ?", (sender_name,))
+        row = cursor.fetchone()
+        conn.close()
+        # Nuovissimo nodo mai visto prima, o prima visto solo via ripetitore mesh
+        if not row or (row[0] is not None and row[0] > 0) or row[1] <= 1:
+            direct_node_alert_cache.add(sender_name)
+            return True
+    except Exception as e:
+        print("Radar check error:", e)
+    return False
+
+async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, content_text: str, snr: Optional[float], hops: int):
+    global AUTO_RESPONDER_ENABLED
+    if not AUTO_RESPONDER_ENABLED or not active_heltec_ws:
+        return
+    my_name = node_info.get("name", "Buscate")
+    if sender_name in (my_name, "Web-Operatore", "Telegram", f"Echo {my_name}", "Echo Buscate", "Nodo Radio", "Unknown"):
+        return
+    if f"da {my_name}" in content_text or "Ack da" in content_text:
+        return
+
+    text_lower = content_text.lower().strip()
+    triggers = ("!ping", "!test", "!echo", "!snr", "!help", "!chi_sei", "!stazione", "!status")
+    matched_trigger = None
+    for tr in triggers:
+        if text_lower == tr or text_lower.startswith(tr + " ") or text_lower.startswith(tr + ":"):
+            matched_trigger = tr
+            break
+    if not matched_trigger:
+        return
+
+    now = time.time()
+    last_reply = auto_responder_cooldown.get(sender_name, 0)
+    if now - last_reply < 60:
+        print(f"Auto-responder: cooldown attivo per {sender_name} ({int(now - last_reply)}s < 60s)")
+        return
+    auto_responder_cooldown[sender_name] = now
+
+    snr_val = f"{snr:+.1f}dB" if snr is not None else "N/A"
+    hops_lbl = "Diretto RF (0 salti)" if hops == 0 else (f"{hops} salto" if hops == 1 else f"{hops} salti")
+
+    if matched_trigger in ("!ping", "!test", "!echo"):
+        resp_text = f"[@{sender_name}]: Pong! Ricevuto da {my_name} • 📶 SNR {snr_val} • 🔀 {hops_lbl}"
+    elif matched_trigger == "!snr":
+        resp_text = f"[@{sender_name}]: Tuo SNR a {my_name}: {snr_val} • {hops_lbl}"
+    elif matched_trigger in ("!chi_sei", "!stazione", "!status"):
+        freq = node_info.get("freq_mhz", 869.618)
+        resp_text = f"[@{sender_name}]: Stazione {my_name} Heltec V3 • {freq}MHz • SNR {snr_val} • {hops_lbl}"
+    elif matched_trigger == "!help":
+        resp_text = f"[@{sender_name}]: Comandi disponibili: !ping, !test, !snr, !status"
+    else:
+        resp_text = f"[@{sender_name}]: Ricevuto! SNR {snr_val} • {hops_lbl}"
+
+    await asyncio.sleep(0.6)
+    frame = build_channel_send_frame(ch_idx, resp_text)
+    sent = await send_to_heltec(frame)
+    if sent:
+        save_message("Auto-Responder", f"Echo {my_name}", ch_name, resp_text, hops=0)
+        await broadcast_telegram(
+            f"🤖 <b>[Auto-Responder Radio]</b>\n"
+            f"Comando <code>{content_text}</code> da <b>{sender_name}</b>\n"
+            f"↳ Risposto su <b>[{ch_idx}: {ch_name}]</b>:\n<i>{resp_text}</i>",
+            lora_channel_idx=ch_idx
+        )
+        await broadcast_to_browsers({
+            "type": "new_message",
+            "source": "Auto-Responder",
+            "sender": f"Echo {my_name}",
+            "channel": ch_name,
+            "channel_idx": ch_idx,
+            "content": resp_text,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "snr": None,
+            "hops": 0
+        })
 
 def register_subscription(chat_id: str, chat_type: str = "private", chat_title: str = "Chat"):
     if not chat_id:
@@ -209,6 +345,8 @@ def record_heard_node(node_name: str, snr: Optional[float], raw_hops: Optional[i
         conn.close()
     except Exception as e:
         print("DB record_heard_node error:", e)
+    if lat is not None and lon is not None:
+        record_node_gps(node_name, lat, lon)
 
 def get_recent_heard_nodes(limit: int = 50, direct_only: bool = False) -> List[dict]:
     try:
@@ -1145,6 +1283,97 @@ async def api_advert_send():
         await broadcast_telegram("📢 <b>Beacon Advert inviato via radio in flood da Web!</b>")
     return {"success": sent}
 
+@app.get("/api/nodes/tracks")
+async def api_nodes_tracks():
+    return get_all_gps_tracks()
+
+@app.get("/api/stats/hourly")
+async def api_stats_hourly():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d %H:00', timestamp) as hr, count(*) as cnt
+            FROM messages
+            WHERE timestamp >= datetime('now', '-24 hours')
+            GROUP BY hr
+            ORDER BY hr ASC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"hour": r[0], "count": r[1]} for r in rows]
+    except Exception as e:
+        print("DB hourly stats error:", e)
+        return []
+
+@app.get("/api/autoresponder")
+async def api_get_autoresponder():
+    return {"enabled": AUTO_RESPONDER_ENABLED}
+
+@app.post("/api/autoresponder")
+async def api_post_autoresponder(request: Request):
+    global AUTO_RESPONDER_ENABLED
+    try:
+        body = await request.json()
+        if "enabled" in body:
+            AUTO_RESPONDER_ENABLED = bool(body["enabled"])
+        return {"enabled": AUTO_RESPONDER_ENABLED}
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+
+PWA_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="100" fill="#0b0f19"/>
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#10b981" stroke-width="18" stroke-dasharray="14 14" opacity="0.6"/>
+  <circle cx="256" cy="256" r="120" fill="none" stroke="#38bdf8" stroke-width="22"/>
+  <circle cx="256" cy="256" r="48" fill="#10b981"/>
+  <path d="M256 110 L256 402 M110 256 L402 256" stroke="#10b981" stroke-width="12" stroke-linecap="round" opacity="0.35"/>
+  <text x="256" y="460" font-family="system-ui, -apple-system, sans-serif" font-size="44" font-weight="900" fill="#38bdf8" text-anchor="middle" letter-spacing="4">MESHCORE</text>
+</svg>"""
+
+@app.get("/api/icon.svg")
+async def api_icon():
+    return Response(content=PWA_ICON_SVG, media_type="image/svg+xml")
+
+@app.get("/manifest.json")
+async def api_manifest():
+    manifest_data = {
+        "name": "MeshCore Station - Buscate",
+        "short_name": "MeshCore",
+        "description": "Stazione Radio LoRa & Companion Radio Console",
+        "start_url": "/app",
+        "display": "standalone",
+        "background_color": "#0b0f19",
+        "theme_color": "#0b0f19",
+        "icons": [
+            {
+                "src": "/api/icon.svg",
+                "sizes": "192x192 512x512",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            }
+        ]
+    }
+    return JSONResponse(manifest_data)
+
+@app.get("/sw.js")
+async def api_service_worker():
+    sw_code = """
+const CACHE_NAME = 'meshcore-cache-v2';
+self.addEventListener('install', (e) => {
+    self.skipWaiting();
+});
+self.addEventListener('activate', (e) => {
+    e.waitUntil(self.clients.claim());
+});
+self.addEventListener('fetch', (e) => {
+    // Network first for real-time WebSocket and LoRa data
+    e.respondWith(
+        fetch(e.request).catch(() => caches.match(e.request))
+    );
+});
+"""
+    return Response(content=sw_code, media_type="application/javascript")
+
 @app.post("/api/nodes/scan")
 async def api_nodes_scan():
     frame_adv = build_send_self_advert_frame(flood=False)
@@ -1252,6 +1481,27 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     record_heard_node(sender_name, snr, hops, ch_name, lat, lon)
                     save_message("LoRa Mesh", sender_name, ch_name, content_text, snr=snr, hops=hops)
 
+                    # Check Radar RF Proximity Alert
+                    if hops == 0 and check_and_alert_direct_node(sender_name, snr, hops):
+                        snr_txt = f"{snr:+.1f} dB" if snr is not None else "N/A"
+                        await broadcast_telegram(
+                            f"🎯 <b>[Radar RF] Nuovo Nodo Diretto Agganciato!</b>\n"
+                            f"📟 <b>{sender_name}</b> a <b>0 salti RF</b> (SNR: <b>{snr_txt}</b>) su <b>[{ch_idx}: {ch_name}]</b>!",
+                            lora_channel_idx=ch_idx
+                        )
+                        await broadcast_to_browsers({
+                            "type": "radar_alert",
+                            "node_name": sender_name,
+                            "snr": snr,
+                            "channel": ch_name,
+                            "channel_idx": ch_idx
+                        })
+
+                    # Trigger Auto-Responder (!ping, !test, !echo)
+                    asyncio.create_task(
+                        handle_auto_responder(sender_name, ch_idx, ch_name, content_text, snr, hops)
+                    )
+
                     # Build rich Telegram post
                     formatted_post = (
                         f"📻 <b>[Canale {ch_idx}: {ch_name}]</b>\n"
@@ -1297,6 +1547,26 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     record_heard_node(sender_name, None, hops, ch_name, lat, lon)
                     save_message("LoRa Mesh", sender_name, ch_name, content_text, hops=hops)
 
+                    # Check Radar RF Proximity Alert
+                    if hops == 0 and check_and_alert_direct_node(sender_name, None, hops):
+                        await broadcast_telegram(
+                            f"🎯 <b>[Radar RF] Nuovo Nodo Diretto Agganciato!</b>\n"
+                            f"📟 <b>{sender_name}</b> a <b>0 salti RF</b> su <b>[{ch_idx}: {ch_name}]</b>!",
+                            lora_channel_idx=ch_idx
+                        )
+                        await broadcast_to_browsers({
+                            "type": "radar_alert",
+                            "node_name": sender_name,
+                            "snr": None,
+                            "channel": ch_name,
+                            "channel_idx": ch_idx
+                        })
+
+                    # Trigger Auto-Responder
+                    asyncio.create_task(
+                        handle_auto_responder(sender_name, ch_idx, ch_name, content_text, None, hops)
+                    )
+
                     formatted_post = (
                         f"📻 <b>[Canale {ch_idx}: {ch_name}]</b>\n"
                         f"👤 <b>{sender_name}</b>: {content_text}\n\n"
@@ -1334,6 +1604,16 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         adv_lon = (gps_lon_raw / 1000000.0) if gps_lon_raw != 0 else None
                         if contact_name:
                             record_heard_node(contact_name, None, out_path_len, "Advert", adv_lat, adv_lon)
+                            adv_h = decode_meshcore_hops(out_path_len)
+                            if adv_h == 0 and check_and_alert_direct_node(contact_name, None, 0):
+                                await broadcast_telegram(f"🎯 <b>[Radar RF] Nuovo Beacon Diretto!</b>\n📟 <b>{contact_name}</b> a 0 salti RF!")
+                                await broadcast_to_browsers({
+                                    "type": "radar_alert",
+                                    "node_name": contact_name,
+                                    "snr": None,
+                                    "channel": "Advert",
+                                    "channel_idx": 0
+                                })
                             print(f"Discovered LoRa Advert from: {contact_name}")
                             await broadcast_to_browsers({
                                 "type": "nodes",
@@ -1883,6 +2163,23 @@ async def telegram_polling_loop():
                                 reply_markup=build_nodes_keyboard(direct_only=False),
                                 message_thread_id=thread_id
                             )
+
+                    elif text.startswith("/autoresponder") or text.startswith("/echo_bot"):
+                        parts = text.split(maxsplit=1)
+                        if len(parts) > 1:
+                            arg = parts[1].strip().lower()
+                            if arg in ("on", "attivo", "1", "true", "si"):
+                                AUTO_RESPONDER_ENABLED = True
+                                await send_telegram("🤖 <b>Auto-Responder LoRa ATTIVATO!</b>\nRisponderà a comandi come <code>!ping</code>, <code>!test</code>, <code>!snr</code> (cooldown 60s per nodo).", chat_id=chat_id, message_thread_id=thread_id)
+                            elif arg in ("off", "disattivo", "0", "false", "no"):
+                                AUTO_RESPONDER_ENABLED = False
+                                await send_telegram("🤖 <b>Auto-Responder LoRa DISATTIVATO.</b>", chat_id=chat_id, message_thread_id=thread_id)
+                            else:
+                                st = "🟢 ATTIVO" if AUTO_RESPONDER_ENABLED else "🔴 DISATTIVO"
+                                await send_telegram(f"ℹ️ Stato Auto-Responder: <b>{st}</b>\nUsa: <code>/autoresponder on</code> o <code>/autoresponder off</code>", chat_id=chat_id, message_thread_id=thread_id)
+                        else:
+                            st = "🟢 ATTIVO" if AUTO_RESPONDER_ENABLED else "🔴 DISATTIVO"
+                            await send_telegram(f"🤖 <b>Auto-Responder LoRa</b>: <b>{st}</b>\nUsa <code>/autoresponder on</code> o <code>/autoresponder off</code> per modificare.", chat_id=chat_id, message_thread_id=thread_id)
 
                     elif text.startswith("/report") or text.startswith("/bollettino"):
                         rep = await generate_report_text()
