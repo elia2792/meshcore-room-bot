@@ -574,6 +574,39 @@ def get_web_client_html() -> str:
             gap: 6px;
         }
 
+        .nodes-filter-bar {
+            display: flex;
+            gap: 8px;
+            margin: 4px 0 8px 0;
+            flex-wrap: wrap;
+        }
+
+        .filter-chip {
+            padding: 6px 14px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            background: var(--surface-card);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .filter-chip:hover {
+            border-color: var(--border-highlight);
+            color: var(--text-main);
+        }
+
+        .filter-chip.active {
+            background: rgba(16, 185, 129, 0.15);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
         .node-card {
             background: var(--surface-card);
             border: 1px solid var(--border);
@@ -1171,6 +1204,14 @@ def get_web_client_html() -> str:
                     <div class="section-title">👥 Nodi Radio Ascoltati (<span id="nodesCount">0</span>)</div>
                     <button id="refreshNodesBtn" class="btn-icon">🔄 Aggiorna</button>
                 </div>
+                <div class="nodes-filter-bar">
+                    <button id="filterNodesAll" class="filter-chip active" onclick="setNodesFilter('all')">
+                        👥 Tutti (<span id="nodesCountAll">0</span>)
+                    </button>
+                    <button id="filterNodesDirect" class="filter-chip" onclick="setNodesFilter('direct')">
+                        🎯 Solo Diretti RF (<span id="nodesCountDirect">0</span>)
+                    </button>
+                </div>
                 <div id="nodesListContainer" style="display:flex; flex-direction:column; gap:10px;">
                     <!-- Filled dynamically -->
                 </div>
@@ -1473,6 +1514,28 @@ def get_web_client_html() -> str:
         let mapMarkers = [];
         let localNodeMarker = null;
         let currentReplyTarget = null;
+        let nodesFilter = 'all';
+
+        function decodeHops(raw) {
+            if (raw === undefined || raw === null || raw === 255 || raw === -1) return 0;
+            return raw & 0x3F;
+        }
+
+        window.setNodesFilter = function(f) {
+            nodesFilter = f;
+            const btnAll = document.getElementById("filterNodesAll");
+            const btnDirect = document.getElementById("filterNodesDirect");
+            if (btnAll && btnDirect) {
+                if (f === 'direct') {
+                    btnAll.classList.remove("active");
+                    btnDirect.classList.add("active");
+                } else {
+                    btnDirect.classList.remove("active");
+                    btnAll.classList.add("active");
+                }
+            }
+            renderNodes();
+        };
 
         function setReplyTarget(m) {
             currentReplyTarget = m;
@@ -1660,12 +1723,13 @@ def get_web_client_html() -> str:
                     });
                     const marker = L.marker([nLat, nLon], { icon: nodeIcon }).addTo(leafletMap);
                     const snrStr = n.last_snr !== null && n.last_snr !== undefined ? ` • SNR: ${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)}dB` : '';
-                    const hopsStr = n.last_hops !== undefined && n.last_hops !== null ? `${n.last_hops} hops` : '';
+                    const hops = decodeHops(n.last_hops);
+                    const hopsStr = hops === 0 ? "🎯 Diretto RF" : `🔀 ${hops} salti`;
                     marker.bindPopup(`
                         <div style="font-size:0.86rem; line-height:1.4;">
                             <b style="color:#38bdf8; font-size:0.92rem;">👤 ${escapeHtml(n.node_name)}</b><br>
                             <span>Canale: <b>${escapeHtml(n.last_channel || 'Radio')}</b></span><br>
-                            <span>Segnale: <b>${hopsStr}${snrStr}</b></span><br>
+                            <span>Percorso: <b>${hopsStr}${snrStr}</b></span><br>
                             <small style="color:#94a3b8;">Visto: ${n.last_seen || 'N/A'}</small>
                         </div>
                     `);
@@ -1769,7 +1833,8 @@ def get_web_client_html() -> str:
                 }
 
                 const snrVal = (n.last_snr !== null && n.last_snr !== undefined) ? `${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)} dB` : "N/A";
-                const hopsVal = (n.last_hops !== undefined && n.last_hops !== null) ? (n.last_hops === 0 ? "0 (Diretto RF)" : `${n.last_hops} hop`) : "Diretto";
+                const hops = decodeHops(n.last_hops);
+                const hopsVal = hops === 0 ? "🎯 0 (Diretto RF)" : `🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                 const packetsVal = n.packets_count || 1;
                 const lastSeenVal = n.last_seen ? n.last_seen : "Adesso";
                 const channelVal = n.last_channel || "Radio LoRa";
@@ -2027,7 +2092,8 @@ def get_web_client_html() -> str:
                     details += `<span>• SNR: ${m.snr > 0 ? '+' : ''}${Number(m.snr).toFixed(1)}dB</span>`;
                 }
                 if (m.hops !== undefined && m.hops !== null && !isOut) {
-                    const hopsLabel = m.hops === 0 ? "Diretto" : `${m.hops} salti`;
+                    const hops = decodeHops(m.hops);
+                    const hopsLabel = hops === 0 ? "🎯 Diretto RF" : `🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                     details += `<span>• ${hopsLabel}</span>`;
                 }
 
@@ -2037,7 +2103,8 @@ def get_web_client_html() -> str:
                         const rtt = m.rtt_ms ? ` • ${m.rtt_ms}ms` : "";
                         let hopInfo = "";
                         if (m.hops !== undefined && m.hops !== null) {
-                            hopInfo = m.hops === 0 ? " • Diretto RF" : ` • ${m.hops} salti`;
+                            const hops = decodeHops(m.hops);
+                            hopInfo = hops === 0 ? " • 🎯 Diretto RF" : ` • 🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                         }
                         details += `<span class="ack-indicator confirmed">✓✓ RECAPITATO${hopInfo}${rtt}</span>`;
                     } else if (status === "air" || status === "transmitted") {
@@ -2066,30 +2133,52 @@ def get_web_client_html() -> str:
         function renderNodes() {
             const container = document.getElementById("nodesListContainer");
             container.innerHTML = "";
-            document.getElementById("nodesCount").textContent = heardNodes.length;
 
-            if (heardNodes.length === 0) {
-                container.innerHTML = `<div style="text-align:center; color:var(--text-dim); padding:30px;">Nessun nodo radio ascoltato finora.<br>I nodi compariranno automaticamente non appena trasmetteranno pacchetti o beacon.</div>`;
+            const totalCount = heardNodes.length;
+            const directNodes = heardNodes.filter(n => decodeHops(n.last_hops) === 0);
+            const directCount = directNodes.length;
+
+            const countEl = document.getElementById("nodesCount");
+            if (countEl) countEl.textContent = totalCount;
+            const countAllEl = document.getElementById("nodesCountAll");
+            if (countAllEl) countAllEl.textContent = totalCount;
+            const countDirectEl = document.getElementById("nodesCountDirect");
+            if (countDirectEl) countDirectEl.textContent = directCount;
+
+            const listToDisplay = (nodesFilter === 'direct') ? directNodes : heardNodes;
+
+            if (listToDisplay.length === 0) {
+                const emptyMsg = (nodesFilter === 'direct')
+                    ? "Nessun nodo ascoltato direttamente via RF (0 salti) finora.<br>Tutti i nodi memorizzati sono stati ricevuti tramite ripetitori o percorsi mesh."
+                    : "Nessun nodo radio ascoltato finora.<br>I nodi compariranno automaticamente non appena trasmetteranno pacchetti o beacon.";
+                container.innerHTML = `<div style="text-align:center; color:var(--text-dim); padding:30px;">${emptyMsg}</div>`;
                 return;
             }
 
-            heardNodes.forEach(n => {
+            listToDisplay.forEach(n => {
                 const card = document.createElement("div");
                 card.className = "node-card";
 
                 const icon = n.lat && n.lon ? "📍" : "📻";
                 const snrText = n.last_snr !== null && n.last_snr !== undefined ? `SNR: ${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)}dB` : "";
-                const hopsText = n.last_hops !== undefined && n.last_hops !== null ? (n.last_hops === 0 ? "0 salti (diretto)" : `${n.last_hops} salti`) : "";
+                const hops = decodeHops(n.last_hops);
+                const isDirect = (hops === 0);
+                const hopsBadge = isDirect
+                    ? `<span style="background:rgba(16, 185, 129, 0.15); color:#10b981; padding:2px 8px; border-radius:12px; font-weight:700; font-size:0.72rem;">🎯 Diretto RF (0 salti)</span>`
+                    : `<span style="background:rgba(245, 158, 11, 0.15); color:#f59e0b; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.72rem;">🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}</span>`;
                 const timeText = n.last_seen ? n.last_seen.substring(11, 16) : "";
 
                 card.innerHTML = `
                     <div class="node-avatar">${icon}</div>
                     <div class="node-info-col">
-                        <div class="node-name-text">${escapeHtml(n.node_name)}</div>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                            <span class="node-name-text">${escapeHtml(n.node_name)}</span>
+                            ${hopsBadge}
+                        </div>
                         <div class="node-sub-text">
                             <span>⏱️ ${timeText}</span>
-                            ${hopsText ? `<span>• ${hopsText}</span>` : ''}
                             ${snrText ? `<span>• ${snrText}</span>` : ''}
+                            <span>• ${n.packets_count || 1} pkt RX</span>
                         </div>
                     </div>
                     <div class="node-actions-col">
@@ -2263,8 +2352,8 @@ def get_web_client_html() -> str:
                 saveMessagesToStorage();
                 renderMessages();
                 playChime("ack");
-                const rttStr = data.round_trip_ms ? ` in ${data.round_trip_ms}ms` : "";
-                const hopsStr = data.hops_str ? ` (${data.hops_str})` : (data.hops !== undefined && data.hops !== null ? (data.hops === 0 ? " (Diretto RF)" : ` (${data.hops} salti)`) : "");
+                const hops = (data.hops !== undefined && data.hops !== null) ? decodeHops(data.hops) : null;
+                const hopsStr = data.hops_str ? ` (${data.hops_str})` : (hops !== null ? (hops === 0 ? " (🎯 Diretto RF)" : ` (🔀 ${hops} salti)`) : "");
                 showToast(`🟢 RECAPITATO! Confermato da nodo mesh${hopsStr}${rttStr}`, true);
             } else if (data.type === "nodes") {
                 heardNodes = data.nodes;

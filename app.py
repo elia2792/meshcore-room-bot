@@ -74,6 +74,17 @@ node_info: Dict[str, Any] = {
     "max_channels": 40
 }
 
+def decode_meshcore_hops(raw_hops: Optional[int]) -> int:
+    """
+    Decodifica il byte path_len del protocollo MeshCore Companion Radio:
+    - Se None, 255 (0xFF), -1 o 0 -> 0 salti (Diretto RF)
+    - I primi 6 bit (raw_hops & 0x3F) rappresentano il numero effettivo di salti (0..63)
+    - I 2 bit più significativi (raw_hops >> 6) definiscono la dimensione dell'hash (1, 2 o 3 byte)
+    """
+    if raw_hops is None or raw_hops in (255, 0xFF, -1, 0):
+        return 0
+    return raw_hops & 0x3F
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -129,6 +140,15 @@ def init_db():
             PRIMARY KEY(chat_id, lora_channel_idx)
         )
     ''')
+    # Sanitize existing distorted hop counts from earlier MeshCore path_len bug
+    try:
+        cursor.execute("UPDATE heard_nodes SET last_hops = (last_hops & 63) WHERE last_hops > 63 AND last_hops != 255")
+        cursor.execute("UPDATE heard_nodes SET last_hops = 0 WHERE last_hops IN (255, -1)")
+        cursor.execute("UPDATE messages SET hops = (hops & 63) WHERE hops > 63 AND hops != 255")
+        cursor.execute("UPDATE messages SET hops = 0 WHERE hops IN (255, -1)")
+    except Exception as e:
+        print("DB hops migration error:", e)
+
     conn.commit()
     conn.close()
 
@@ -166,9 +186,10 @@ def get_all_subscriptions() -> List[str]:
         print("DB get_all_subscriptions error:", e)
     return list(recipients)
 
-def record_heard_node(node_name: str, snr: Optional[float], hops: int, channel: str, lat: Optional[float] = None, lon: Optional[float] = None):
+def record_heard_node(node_name: str, snr: Optional[float], raw_hops: Optional[int], channel: str, lat: Optional[float] = None, lon: Optional[float] = None):
     if not node_name or node_name in ("Nodo Radio", "Unknown", "Utente"):
         return
+    hops = decode_meshcore_hops(raw_hops)
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -189,18 +210,29 @@ def record_heard_node(node_name: str, snr: Optional[float], hops: int, channel: 
     except Exception as e:
         print("DB record_heard_node error:", e)
 
-def get_recent_heard_nodes(limit: int = 50) -> List[dict]:
+def get_recent_heard_nodes(limit: int = 50, direct_only: bool = False) -> List[dict]:
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT node_name, last_seen, last_snr, last_hops, last_channel, lat, lon, packets_count FROM heard_nodes ORDER BY last_seen DESC LIMIT ?",
-            (limit,)
-        )
+        if direct_only:
+            cursor.execute(
+                "SELECT node_name, last_seen, last_snr, last_hops, last_channel, lat, lon, packets_count FROM heard_nodes WHERE (last_hops = 0 OR last_hops IS NULL) ORDER BY last_seen DESC LIMIT ?",
+                (limit,)
+            )
+        else:
+            cursor.execute(
+                "SELECT node_name, last_seen, last_snr, last_hops, last_channel, lat, lon, packets_count FROM heard_nodes ORDER BY last_seen DESC LIMIT ?",
+                (limit,)
+            )
         rows = cursor.fetchall()
         conn.close()
-        return [dict(r) for r in rows]
+        res = []
+        for r in rows:
+            d = dict(r)
+            d["last_hops"] = decode_meshcore_hops(d.get("last_hops"))
+            res.append(d)
+        return res
     except Exception as e:
         print("DB get_recent_heard_nodes error:", e)
         return []
@@ -247,12 +279,13 @@ def get_topic_binding(chat_id: str, lora_channel_idx: int) -> Optional[int]:
 
 def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None) -> int:
     msg_id = 0
+    dec_hops = decode_meshcore_hops(hops) if hops is not None else None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO messages (source, sender, channel, content, snr, hops, ack_status, rtt_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (source, sender, channel, content, snr, hops, ack_status, rtt_ms)
+            (source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms)
         )
         msg_id = cursor.lastrowid
         conn.commit()
@@ -262,15 +295,16 @@ def save_message(source: str, sender: str, channel: str, content: str, snr: Opti
     return msg_id
 
 def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None):
+    dec_hops = decode_meshcore_hops(hops) if hops is not None else None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        if rtt_ms is not None and hops is not None:
-            cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ?, hops = ? WHERE id = ?", (ack_status, rtt_ms, hops, msg_id))
+        if rtt_ms is not None and dec_hops is not None:
+            cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ?, hops = ? WHERE id = ?", (ack_status, rtt_ms, dec_hops, msg_id))
         elif rtt_ms is not None:
             cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ? WHERE id = ?", (ack_status, rtt_ms, msg_id))
-        elif hops is not None:
-            cursor.execute("UPDATE messages SET ack_status = ?, hops = ? WHERE id = ?", (ack_status, hops, msg_id))
+        elif dec_hops is not None:
+            cursor.execute("UPDATE messages SET ack_status = ?, hops = ? WHERE id = ?", (ack_status, dec_hops, msg_id))
         else:
             cursor.execute("UPDATE messages SET ack_status = ? WHERE id = ?", (ack_status, msg_id))
         conn.commit()
@@ -295,7 +329,13 @@ def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List
             )
         rows = cursor.fetchall()
         conn.close()
-        return [dict(r) for r in reversed(rows)]
+        res = []
+        for r in reversed(rows):
+            d = dict(r)
+            if d.get("hops") is not None:
+                d["hops"] = decode_meshcore_hops(d["hops"])
+            res.append(d)
+        return res
     except Exception as e:
         print("DB fetch error:", e)
         return []
@@ -324,14 +364,16 @@ def format_signal_info(snr: Optional[float], path_len: Optional[int]) -> str:
     else:
         snr_str = "N/A"
     
-    if path_len is None or path_len == 0 or path_len == 255:
-        hops_str = "Diretto (0 salti)"
+    hops = decode_meshcore_hops(path_len)
+    if hops == 0:
+        hops_str = "🎯 Diretto RF (0 salti)"
+    elif hops == 1:
+        hops_str = "🔀 1 salto"
     else:
-        hop_word = "salto" if path_len == 1 else "salti"
-        hops_str = f"{path_len} {hop_word}"
+        hops_str = f"🔀 {hops} salti"
     
     now_time = datetime.now().strftime("%H:%M")
-    return f"📡 Segnale: <b>{snr_str}</b> | Salti: <b>{hops_str}</b> | ⏱️ {now_time}"
+    return f"📡 Segnale: <b>{snr_str}</b> | Percorso: <b>{hops_str}</b> | ⏱️ {now_time}"
 
 def build_message_inline_keyboard(ch_idx: int, ch_name: str) -> dict:
     return {
@@ -518,22 +560,49 @@ def build_main_menu_keyboard() -> dict:
                 {"text": "👥 Nodi Ascoltati", "callback_data": "menu_heard"}
             ],
             [
-                {"text": "🔍 Scan Nodi Vicini", "callback_data": "scan_nodes"},
-                {"text": "📋 Report Stazione", "callback_data": "menu_report"}
+                {"text": "🎯 Nodi Diretti RF", "callback_data": "heard_direct"},
+                {"text": "🔍 Scan Nodi Vicini", "callback_data": "scan_nodes"}
             ],
             [
-                {"text": "📊 Stato Live", "callback_data": "menu_status"},
-                {"text": "🗺️ Mappa Live", "url": "https://livemapnew.meshcoreitalia.it/"}
+                {"text": "📋 Report Stazione", "callback_data": "menu_report"},
+                {"text": "📊 Stato Live", "callback_data": "menu_status"}
             ],
             [
-                {"text": "⚙️ Impostazioni", "callback_data": "menu_settings"},
+                {"text": "🗺️ Mappa Live", "url": "https://livemapnew.meshcoreitalia.it/"},
                 {"text": "📜 Storico Room", "callback_data": "menu_history"}
             ],
             [
-                {"text": "🌐 Apri Web Client UI", "url": "https://meshcore-room-bot.onrender.com/app"}
+                {"text": "⚙️ Impostazioni", "callback_data": "menu_settings"},
+                {"text": "🌐 Web Client UI", "url": "https://meshcore-room-bot.onrender.com/app"}
             ]
         ]
     }
+
+def build_nodes_keyboard(direct_only: bool = False) -> dict:
+    if direct_only:
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "👥 Mostra Tutti i Nodi", "callback_data": "menu_heard"},
+                    {"text": "🔄 Aggiorna", "callback_data": "heard_direct"}
+                ],
+                [
+                    {"text": "◀️ Torna al Menu Principale", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
+    else:
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "🎯 Solo Nodi Diretti RF", "callback_data": "heard_direct"},
+                    {"text": "🔄 Aggiorna", "callback_data": "menu_heard"}
+                ],
+                [
+                    {"text": "◀️ Torna al Menu Principale", "callback_data": "back_to_menu"}
+                ]
+            ]
+        }
 
 def build_settings_keyboard() -> dict:
     return {
@@ -582,17 +651,20 @@ def build_main_menu_text(chat_id: str) -> str:
         f"<i>Seleziona un'azione:</i>"
     )
 
-def format_node_list_rich(nodes: list, my_lat: float = None, my_lon: float = None) -> str:
+def format_node_list_rich(nodes: list, my_lat: float = None, my_lon: float = None, direct_only: bool = False) -> str:
     if not nodes:
-        return "ℹ️ Nessun nodo rilevato nelle ultime ore."
-    lines = [f"👥 <b>Nodi Radio Rilevati ({len(nodes)}):</b>\n"]
+        return "ℹ️ Nessun nodo radio ascoltato <b>direttamente (0 salti)</b> di recente." if direct_only else "ℹ️ Nessun nodo rilevato nelle ultime ore."
+    title = f"🎯 <b>Nodi Radio Ascoltati DIRETTAMENTE (0 salti)</b> ({len(nodes)}):" if direct_only else f"👥 <b>Nodi Radio Rilevati</b> ({len(nodes)}):"
+    lines = [title + "\n"]
     for n in nodes:
         snr_str = f"{n['last_snr']:+.1f} dB" if n["last_snr"] is not None else "N/A"
-        h = n.get("last_hops", 0)
-        if h == 0 or h == 255:
-            hops_str = "Diretto RF"
+        h = decode_meshcore_hops(n.get("last_hops", 0))
+        if h == 0:
+            hops_str = "🎯 Diretto RF (0 salti)"
+        elif h == 1:
+            hops_str = "🔀 1 salto"
         else:
-            hops_str = f"{h} salto" if h == 1 else f"{h} salti"
+            hops_str = f"🔀 {h} salti"
 
         dist_str = ""
         n_lat = n.get("lat")
@@ -607,7 +679,7 @@ def format_node_list_rich(nodes: list, my_lat: float = None, my_lon: float = Non
         block = (
             f"━━━━━━━━━━━━━\n"
             f"📟 <b>{n['node_name']}</b>\n"
-            f"  📶 SNR: <b>{snr_str}</b> | 🔀 <b>{hops_str}</b>\n"
+            f"  📶 SNR: <b>{snr_str}</b> | <b>{hops_str}</b>\n"
             f"  📦 Pkt RX: {n.get('packets_count', '?')} | 📻 {n['last_channel']}\n"
             f"  ⏱️ Ultimo: {last_time_str}"
         )
@@ -624,10 +696,13 @@ async def generate_report_text() -> str:
     recent_nodes = get_recent_heard_nodes(6)
     nodes_summary = ""
     if recent_nodes:
-        nodes_summary = "\n<b>Ultimi nodi ascoltati via radio:</b>\n" + "\n".join(
-            f"• <b>{n['node_name']}</b> (SNR: {n['last_snr']:+.1f} dB, {n['last_hops']} hops)" if n['last_snr'] is not None else f"• <b>{n['node_name']}</b> ({n['last_hops']} hops)"
-            for n in recent_nodes
-        )
+        node_lines = []
+        for n in recent_nodes:
+            h = decode_meshcore_hops(n.get("last_hops"))
+            h_lbl = "🎯 Diretto RF" if h == 0 else (f"{h} salto" if h == 1 else f"{h} salti")
+            snr_lbl = f", SNR {n['last_snr']:+.1f} dB" if n.get("last_snr") is not None else ""
+            node_lines.append(f"• <b>{n['node_name']}</b> ({h_lbl}{snr_lbl})")
+        nodes_summary = "\n<b>Ultimi nodi ascoltati via radio:</b>\n" + "\n".join(node_lines)
     else:
         nodes_summary = "\n<i>Nessun nodo ascoltato nelle ultime ore.</i>"
 
@@ -954,8 +1029,8 @@ async def api_messages(limit: int = 50, channel: Optional[str] = None):
     return get_recent_messages(limit, channel=channel)
 
 @app.get("/api/nodes")
-async def api_nodes(limit: int = 100):
-    return get_recent_heard_nodes(limit)
+async def api_nodes(limit: int = 100, direct_only: bool = False):
+    return get_recent_heard_nodes(limit, direct_only=direct_only)
 
 @app.post("/api/send")
 async def api_send(request: Request):
@@ -1159,7 +1234,8 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     snr_raw = struct.unpack("b", bytes([payload[1]]))[0]
                     snr = snr_raw / 4.0
                     ch_idx = payload[4]
-                    path_len = payload[5]
+                    raw_path_len = payload[5]
+                    hops = decode_meshcore_hops(raw_path_len)
                     ch_name = discovered_channels.get(ch_idx, f"Canale #{ch_idx}")
                     msg_text = payload[11:].decode("utf-8", errors="ignore").strip()
 
@@ -1173,14 +1249,14 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
 
                     # Check GPS coordinates
                     lat, lon = extract_gps_coords(content_text)
-                    record_heard_node(sender_name, snr, path_len, ch_name, lat, lon)
-                    save_message("LoRa Mesh", sender_name, ch_name, content_text, snr=snr, hops=path_len)
+                    record_heard_node(sender_name, snr, hops, ch_name, lat, lon)
+                    save_message("LoRa Mesh", sender_name, ch_name, content_text, snr=snr, hops=hops)
 
                     # Build rich Telegram post
                     formatted_post = (
                         f"📻 <b>[Canale {ch_idx}: {ch_name}]</b>\n"
                         f"👤 <b>{sender_name}</b>: {content_text}\n\n"
-                        f"{format_signal_info(snr, path_len)}"
+                        f"{format_signal_info(snr, hops)}"
                     )
                     if lat and lon:
                         formatted_post += f"\n📍 <a href='https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=14/{lat}/{lon}'>Apri Posizione su Mappa ({lat:.4f}, {lon:.4f})</a>"
@@ -1196,7 +1272,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         "content": content_text,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "snr": snr,
-                        "hops": path_len,
+                        "hops": hops,
                         "lat": lat,
                         "lon": lon
                     })
@@ -1205,7 +1281,8 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                 # RESP_CODE_CHANNEL_MSG_RECV = 8 (0x08)
                 elif code == 8 and len(payload) >= 8:
                     ch_idx = payload[1]
-                    path_len = payload[2]
+                    raw_path_len = payload[2]
+                    hops = decode_meshcore_hops(raw_path_len)
                     ch_name = discovered_channels.get(ch_idx, f"Canale #{ch_idx}")
                     msg_text = payload[8:].decode("utf-8", errors="ignore").strip()
 
@@ -1217,13 +1294,13 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         content_text = parts[1].strip()
 
                     lat, lon = extract_gps_coords(content_text)
-                    record_heard_node(sender_name, None, path_len, ch_name, lat, lon)
-                    save_message("LoRa Mesh", sender_name, ch_name, content_text, hops=path_len)
+                    record_heard_node(sender_name, None, hops, ch_name, lat, lon)
+                    save_message("LoRa Mesh", sender_name, ch_name, content_text, hops=hops)
 
                     formatted_post = (
                         f"📻 <b>[Canale {ch_idx}: {ch_name}]</b>\n"
                         f"👤 <b>{sender_name}</b>: {content_text}\n\n"
-                        f"{format_signal_info(None, path_len)}"
+                        f"{format_signal_info(None, hops)}"
                     )
                     if lat and lon:
                         formatted_post += f"\n📍 <a href='https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=14/{lat}/{lon}'>Apri Posizione su Mappa ({lat:.4f}, {lon:.4f})</a>"
@@ -1239,7 +1316,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         "content": content_text,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "snr": None,
-                        "hops": path_len,
+                        "hops": hops,
                         "lat": lat,
                         "lon": lon
                     })
@@ -1472,13 +1549,25 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
     # ── Nodi ascoltati (da menu) ────────────────────────────────────────────
     elif data in ("menu_heard", "heard_nodes"):
         await ack()
-        nodes = get_recent_heard_nodes(50)
+        nodes = get_recent_heard_nodes(50, direct_only=False)
         my_lat = node_info.get("lat")
         my_lon = node_info.get("lon")
         await send_telegram(
-            format_node_list_rich(nodes, my_lat, my_lon),
+            format_node_list_rich(nodes, my_lat, my_lon, direct_only=False),
             chat_id=chat_id,
-            reply_markup=build_main_menu_keyboard()
+            reply_markup=build_nodes_keyboard(direct_only=False)
+        )
+
+    # ── Nodi diretti RF (da menu o toggle) ───────────────────────────────────
+    elif data == "heard_direct":
+        await ack()
+        nodes = get_recent_heard_nodes(50, direct_only=True)
+        my_lat = node_info.get("lat")
+        my_lon = node_info.get("lon")
+        await send_telegram(
+            format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
+            chat_id=chat_id,
+            reply_markup=build_nodes_keyboard(direct_only=True)
         )
 
     # ── Report stazione ─────────────────────────────────────────────────────
@@ -1759,20 +1848,39 @@ async def telegram_polling_loop():
                             message_thread_id=thread_id
                         )
 
+                    elif text.startswith("/diretti") or text.startswith("/direct"):
+                        req_limit = 30
+                        parts = text.split()
+                        if len(parts) > 1 and parts[1].isdigit():
+                            req_limit = min(int(parts[1]), 100)
+                        nodes = get_recent_heard_nodes(req_limit, direct_only=True)
+                        if not nodes:
+                            await send_telegram("ℹ️ Nessun nodo radio ascoltato <b>direttamente (0 salti)</b> di recente.", chat_id=chat_id, message_thread_id=thread_id)
+                        else:
+                            my_lat = node_info.get("lat")
+                            my_lon = node_info.get("lon")
+                            await send_telegram(
+                                format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
+                                chat_id=chat_id,
+                                reply_markup=build_nodes_keyboard(direct_only=True),
+                                message_thread_id=thread_id
+                            )
+
                     elif text.startswith("/nodi") or text.startswith("/heard"):
                         req_limit = 30
                         parts = text.split()
                         if len(parts) > 1 and parts[1].isdigit():
                             req_limit = min(int(parts[1]), 100)
-                        nodes = get_recent_heard_nodes(req_limit)
+                        nodes = get_recent_heard_nodes(req_limit, direct_only=False)
                         if not nodes:
                             await send_telegram("ℹ️ Nessun nodo radio memorizzato di recente.", chat_id=chat_id, message_thread_id=thread_id)
                         else:
                             my_lat = node_info.get("lat")
                             my_lon = node_info.get("lon")
                             await send_telegram(
-                                format_node_list_rich(nodes, my_lat, my_lon),
+                                format_node_list_rich(nodes, my_lat, my_lon, direct_only=False),
                                 chat_id=chat_id,
+                                reply_markup=build_nodes_keyboard(direct_only=False),
                                 message_thread_id=thread_id
                             )
 
