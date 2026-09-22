@@ -1301,14 +1301,19 @@ async def api_stats_hourly():
         """)
         rows = cursor.fetchall()
         conn.close()
-        return [{"hour": r[0], "count": r[1]} for r in rows]
+        hourly_list = []
+        for r in rows:
+            hr_str = str(r[0]) if r[0] else ""
+            short_hr = hr_str.split(" ")[-1].split(":")[0] if " " in hr_str else hr_str
+            hourly_list.append({"hour": short_hr, "count": r[1], "full": hr_str})
+        return {"hourly": hourly_list, "total": sum(r[1] for r in rows)}
     except Exception as e:
         print("DB hourly stats error:", e)
-        return []
+        return {"hourly": [], "total": 0}
 
 @app.get("/api/autoresponder")
 async def api_get_autoresponder():
-    return {"enabled": AUTO_RESPONDER_ENABLED}
+    return {"enabled": AUTO_RESPONDER_ENABLED, "auto_responder_enabled": AUTO_RESPONDER_ENABLED}
 
 @app.post("/api/autoresponder")
 async def api_post_autoresponder(request: Request):
@@ -1317,7 +1322,9 @@ async def api_post_autoresponder(request: Request):
         body = await request.json()
         if "enabled" in body:
             AUTO_RESPONDER_ENABLED = bool(body["enabled"])
-        return {"enabled": AUTO_RESPONDER_ENABLED}
+        elif "auto_responder_enabled" in body:
+            AUTO_RESPONDER_ENABLED = bool(body["auto_responder_enabled"])
+        return {"enabled": AUTO_RESPONDER_ENABLED, "auto_responder_enabled": AUTO_RESPONDER_ENABLED}
     except Exception:
         return JSONResponse({"error": "Invalid request"}, status_code=400)
 
