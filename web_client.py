@@ -1874,16 +1874,23 @@ def get_web_client_html() -> str:
                 const resp = await fetch("/api/stats/hourly");
                 if (!resp.ok) return;
                 const data = await resp.json();
-                const hourly = data.hourly || [];
+                const hourly = Array.isArray(data) ? data : (data.hourly || []);
                 const container = document.getElementById("trafficBarsRow");
                 if (!container) return;
                 container.innerHTML = "";
 
+                if (hourly.length === 0) {
+                    container.innerHTML = '<div style="margin:auto; font-size:0.75rem; color:var(--text-dim); text-align:center;">Nessun pacchetto registrato nelle ultime 24 ore.</div>';
+                    const summaryEl = document.getElementById("trafficTotalSummary");
+                    if (summaryEl) summaryEl.textContent = "0 pacchetti (24h)";
+                    return;
+                }
+
                 const maxCount = Math.max(...hourly.map(h => h.count), 1);
-                let totalPackets = 0;
+                let totalPackets = data.total !== undefined ? data.total : 0;
 
                 hourly.forEach(item => {
-                    totalPackets += item.count;
+                    if (data.total === undefined) totalPackets += item.count;
                     const barCol = document.createElement("div");
                     barCol.className = "traffic-bar-col";
                     const heightPercent = Math.max(Math.round((item.count / maxCount) * 100), item.count > 0 ? 8 : 2);
@@ -1891,7 +1898,7 @@ def get_web_client_html() -> str:
 
                     barCol.innerHTML = `
                         <div class="traffic-bar-fill" style="height:${heightPercent}%;"></div>
-                        <div class="traffic-bar-hour">${item.hour % 6 === 0 ? item.hour : ''}</div>
+                        <div class="traffic-bar-hour">${item.hour}</div>
                     `;
                     container.appendChild(barCol);
                 });
@@ -1908,7 +1915,7 @@ def get_web_client_html() -> str:
                 const resp = await fetch("/api/autoresponder");
                 if (!resp.ok) return;
                 const data = await resp.json();
-                updateAutoResponderBadge(data.auto_responder_enabled);
+                updateAutoResponderBadge(data.auto_responder_enabled !== undefined ? data.auto_responder_enabled : data.enabled);
             } catch(e) {}
         }
 
