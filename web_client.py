@@ -1977,20 +1977,7 @@ def get_web_client_html() -> str:
         }
 
         function loadMessagesFromStorage() {
-            let combined = [];
-            const existingKeys = new Set();
-
-            function addMessage(m) {
-                if (!m) return;
-                const content = m.content || m.text || "";
-                if (!content && !m.sender) return;
-                m.content = content;
-                const k = getMsgKey(m);
-                if (!existingKeys.has(k)) {
-                    combined.push(m);
-                    existingKeys.add(k);
-                }
-            }
+            let allArrays = [];
 
             try {
                 for (let i = 0; i < localStorage.length; i++) {
@@ -2000,8 +1987,8 @@ def get_web_client_html() -> str:
                             const raw = localStorage.getItem(key);
                             if (raw) {
                                 const parsed = JSON.parse(raw);
-                                if (Array.isArray(parsed)) {
-                                    parsed.forEach(addMessage);
+                                if (Array.isArray(parsed) && parsed.length > 0) {
+                                    allArrays.push({ key: key, count: parsed.length, items: parsed });
                                 }
                             }
                         } catch(e) {}
@@ -2009,20 +1996,52 @@ def get_web_client_html() -> str:
                 }
             } catch(e) {}
 
+            // Prioritize largest arrays first
+            allArrays.sort((a,b) => b.count - a.count);
+
+            let combined = [];
+            const seenSignatures = new Set();
+
+            allArrays.forEach((arr) => {
+                arr.items.forEach((m, idx) => {
+                    if (!m) return;
+                    const content = m.content || m.text || "";
+                    if (!content && !m.sender) return;
+                    m.content = content;
+
+                    const ts = m.timestamp || "";
+                    const snd = m.sender || "";
+                    const ch = m.channel || "";
+                    const snr = m.snr !== undefined && m.snr !== null ? String(m.snr) : "";
+                    const hops = m.hops !== undefined && m.hops !== null ? String(m.hops) : "";
+                    const cid = m.client_id || "";
+
+                    let sig = cid ? `cid_${cid}` : `${ts}|${snd}|${ch}|${snr}|${hops}|${content}`;
+                    if (!ts && !cid) {
+                        sig += `_idx_${idx}_${arr.key}`;
+                    }
+
+                    if (!seenSignatures.has(sig)) {
+                        seenSignatures.add(sig);
+                        combined.push(m);
+                    }
+                });
+            });
+
             combined.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-1000)));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-2500)));
             } catch(e) {}
             return combined;
         }
 
         function saveMessagesToStorage() {
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-1000)));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-2500)));
             } catch(e) {
                 console.warn("Storage save error:", e);
                 try {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-300)));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-800)));
                 } catch(e2) {}
             }
         }
