@@ -2012,7 +2012,12 @@ def get_web_client_html() -> str:
         function saveMessagesToStorage() {
             try {
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-500)));
-            } catch(e) {}
+            } catch(e) {
+                console.warn("Storage save error:", e);
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-100)));
+                } catch(e2) {}
+            }
         }
 
         let messages = loadMessagesFromStorage();
@@ -3491,6 +3496,7 @@ def get_web_client_html() -> str:
                 ack_status: "pending"
             };
             messages.push(optimisticMsg);
+            saveMessagesToStorage();
             renderMessages();
 
             if (socket && socket.readyState === WebSocket.OPEN) {
