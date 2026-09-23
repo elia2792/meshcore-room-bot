@@ -1972,7 +1972,6 @@ def get_web_client_html() -> str:
         const STORAGE_KEY = "meshcore_room_messages_v3";
 
         function getMsgKey(m) {
-            if (m.id) return `id_${m.id}`;
             if (m.client_id) return `cid_${m.client_id}`;
             return `${m.timestamp || ''}_${m.sender || ''}_${m.content || ''}`;
         }
@@ -1981,44 +1980,49 @@ def get_web_client_html() -> str:
             let combined = [];
             const existingKeys = new Set();
 
-            function importFromKey(key) {
-                try {
-                    const raw = localStorage.getItem(key);
-                    if (raw) {
-                        const parsed = JSON.parse(raw);
-                        if (Array.isArray(parsed)) {
-                            parsed.forEach(m => {
-                                const k = getMsgKey(m);
-                                if (!existingKeys.has(k)) {
-                                    combined.push(m);
-                                    existingKeys.add(k);
-                                }
-                            });
-                        }
-                    }
-                } catch(e) {}
+            function addMessage(m) {
+                if (!m) return;
+                const content = m.content || m.text || "";
+                if (!content && !m.sender) return;
+                m.content = content;
+                const k = getMsgKey(m);
+                if (!existingKeys.has(k)) {
+                    combined.push(m);
+                    existingKeys.add(k);
+                }
             }
 
-            importFromKey(STORAGE_KEY);
-            importFromKey("meshcore_room_messages");
-            importFromKey("meshcore_room_messages_v1");
-            importFromKey("meshcore_room_messages_v2");
-            importFromKey("meshcore_chat_messages_v1");
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && (key.includes("mesh") || key.includes("message") || key.includes("chat") || key.includes("room"))) {
+                        try {
+                            const raw = localStorage.getItem(key);
+                            if (raw) {
+                                const parsed = JSON.parse(raw);
+                                if (Array.isArray(parsed)) {
+                                    parsed.forEach(addMessage);
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                }
+            } catch(e) {}
 
             combined.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-500)));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-1000)));
             } catch(e) {}
             return combined;
         }
 
         function saveMessagesToStorage() {
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-500)));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-1000)));
             } catch(e) {
                 console.warn("Storage save error:", e);
                 try {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-100)));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-300)));
                 } catch(e2) {}
             }
         }
