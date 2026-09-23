@@ -71,7 +71,8 @@ node_info: Dict[str, Any] = {
     "tx_power": 20,
     "lat": None,
     "lon": None,
-    "max_channels": 40
+    "max_channels": 40,
+    "regional_scope": "it"
 }
 
 def decode_meshcore_hops(raw_hops: Optional[int]) -> int:
@@ -154,6 +155,14 @@ def init_db():
     except Exception:
         pass
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS node_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    cursor.execute("INSERT OR IGNORE INTO node_settings (key, value) VALUES ('regional_scope', 'it')")
+
     # Sanitize existing distorted hop counts from earlier MeshCore path_len bug
     try:
         cursor.execute("UPDATE heard_nodes SET last_hops = (last_hops & 63) WHERE last_hops > 63 AND last_hops != 255")
@@ -165,6 +174,27 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+def get_node_setting(key: str, default: str = "") -> str:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT value FROM node_settings WHERE key = ?", (key,))
+        row = c.fetchone()
+        conn.close()
+        return row[0] if row else default
+    except Exception:
+        return default
+
+def set_node_setting(key: str, value: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO node_settings (key, value) VALUES (?, ?)", (key, value))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("set_node_setting error:", e)
 
 # ── Radar RF & Auto-Responder Global State ─────────────────────────────────────
 AUTO_RESPONDER_ENABLED = True
@@ -645,6 +675,16 @@ async def query_all_heltec_channels():
     await send_to_heltec(build_get_contacts_frame(0))
     await asyncio.sleep(0.1)
     await send_to_heltec(build_sync_next_msg_frame())
+    # Send regional scope configuration if supported by Heltec CLI/firmware
+    scope = node_info.get("regional_scope", "it")
+    if scope:
+        await asyncio.sleep(0.1)
+        try:
+            await send_to_heltec(f"region default {scope}\r\n".encode("utf-8"))
+            await asyncio.sleep(0.05)
+            await send_to_heltec(b"region save\r\n")
+        except Exception:
+            pass
 
 def resolve_channel(target_str: str) -> Optional[int]:
     clean = target_str.strip().lstrip("#")
@@ -743,6 +783,8 @@ def build_nodes_keyboard(direct_only: bool = False) -> dict:
         }
 
 def build_settings_keyboard() -> dict:
+    scope = node_info.get("regional_scope", "it").upper()
+    auto_resp_lbl = "Echo: ON 🟢" if AUTO_RESPONDER_ENABLED else "Echo: OFF 🔴"
     return {
         "inline_keyboard": [
             [
@@ -752,6 +794,10 @@ def build_settings_keyboard() -> dict:
             [
                 {"text": "🏷️ Nome Nodo", "callback_data": "set_name"},
                 {"text": "📍 Posizione GPS", "callback_data": "set_gps"}
+            ],
+            [
+                {"text": f"🌐 Scope ({scope})", "callback_data": "set_scope"},
+                {"text": f"🤖 {auto_resp_lbl}", "callback_data": "toggle_autoresponder"}
             ],
             [
                 {"text": "📢 Invia Beacon Advert", "callback_data": "send_beacon"},
@@ -852,6 +898,7 @@ async def generate_report_text() -> str:
         f"• <b>Stato Heltec V3:</b> {heltec_status}\n"
         f"• <b>Connessione attiva da:</b> {uptime_since}\n"
         f"• <b>Parametri Radio:</b> {node_info.get('freq_mhz', 869.618)} MHz | BW {node_info.get('bw_khz', 62.5)} kHz | SF{node_info.get('sf', 8)} CR{node_info.get('cr', 8)}\n"
+        f"• <b>Ambito Regionale:</b> {node_info.get('regional_scope', 'it').upper()}\n"
         f"• <b>Canali monitorati:</b> {ch_list}\n"
         f"• <b>Pacchetti totali:</b> RX {stats['packets_rx']} | TX {stats['packets_tx']}\n"
         f"{nodes_summary}"
@@ -885,6 +932,7 @@ async def keep_alive_loop():
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    node_info["regional_scope"] = get_node_setting("regional_scope", "it")
     asyncio.create_task(telegram_polling_loop())
     asyncio.create_task(periodic_heartbeat_loop())
     asyncio.create_task(keep_alive_loop())
@@ -1142,6 +1190,21 @@ async def websocket_client_endpoint(websocket: WebSocket):
                 frame = build_set_device_time_frame()
                 sent = await send_to_heltec(frame)
                 await websocket.send_json({"type": "action_result", "action": "sync_time", "success": sent})
+            elif action == "set_scope":
+                new_scope = str(data.get("scope", "")).strip().lower()
+                if new_scope:
+                    node_info["regional_scope"] = new_scope
+                    set_node_setting("regional_scope", new_scope)
+                    if active_heltec_ws:
+                        try:
+                            await send_to_heltec(f"region default {new_scope}\r\n".encode("utf-8"))
+                            await asyncio.sleep(0.05)
+                            await send_to_heltec(b"region save\r\n")
+                        except Exception:
+                            pass
+                    await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                    await broadcast_telegram(f"🌐 <b>Ambito Regionale impostato da Web:</b> <code>{new_scope.upper()}</code>")
+                    await websocket.send_json({"type": "action_result", "action": "set_scope", "success": True, "scope": new_scope})
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
@@ -1264,8 +1327,50 @@ async def api_settings_node(request: Request):
         except Exception:
             pass
 
+    scope = body.get("scope") or body.get("regional_scope")
+    if scope:
+        clean_scope = str(scope).strip().lower()
+        node_info["regional_scope"] = clean_scope
+        set_node_setting("regional_scope", clean_scope)
+        if active_heltec_ws:
+            try:
+                await send_to_heltec(f"region default {clean_scope}\r\n".encode("utf-8"))
+                await asyncio.sleep(0.05)
+                await send_to_heltec(b"region save\r\n")
+            except Exception:
+                pass
+        await broadcast_telegram(f"🌐 <b>Ambito Regionale aggiornato da Web:</b> <code>{clean_scope.upper()}</code>")
+
     await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
-    return {"success": sent, "node_info": node_info}
+    return {"success": sent or bool(scope), "node_info": node_info}
+
+@app.get("/api/settings/scope")
+async def api_get_scope():
+    return {"regional_scope": node_info.get("regional_scope", "it")}
+
+@app.post("/api/settings/scope")
+async def api_set_scope(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    scope = str(body.get("scope") or body.get("regional_scope") or "").strip().lower()
+    if not scope:
+        return JSONResponse({"error": "Missing scope parameter"}, status_code=400)
+    node_info["regional_scope"] = scope
+    set_node_setting("regional_scope", scope)
+    sent = False
+    if active_heltec_ws:
+        try:
+            await send_to_heltec(f"region default {scope}\r\n".encode("utf-8"))
+            await asyncio.sleep(0.05)
+            await send_to_heltec(b"region save\r\n")
+            sent = True
+        except Exception:
+            pass
+    await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+    await broadcast_telegram(f"🌐 <b>Ambito Regionale aggiornato:</b> <code>{scope.upper()}</code>")
+    return {"success": True, "regional_scope": scope, "sent_to_heltec": sent}
 
 @app.post("/api/reboot")
 async def api_reboot():
@@ -1931,6 +2036,8 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
         name = node_info.get("name", "N/A")
         lat = node_info.get("lat", "N/A")
         lon = node_info.get("lon", "N/A")
+        scope = node_info.get("regional_scope", "it").upper()
+        echo_st = "🟢 ATTIVO" if AUTO_RESPONDER_ENABLED else "🔴 DISATTIVO"
         heltec_ok = "🟢" if active_heltec_ws else "🔴"
         await send_telegram(
             f"⚙️ <b>Impostazioni Heltec V3</b>\n\n"
@@ -1938,6 +2045,8 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
             f"⚡ <b>TX Power:</b> {tx} dBm\n"
             f"🏷️ <b>Nome Nodo:</b> {name}\n"
             f"📍 <b>GPS:</b> {lat}, {lon}\n"
+            f"🌐 <b>Ambito Regionale:</b> <code>{scope}</code>\n"
+            f"🤖 <b>Auto-Responder (Echo):</b> {echo_st}\n"
             f"🔌 <b>Heltec:</b> {heltec_ok} {'Connessa' if active_heltec_ws else 'Non connessa'}\n\n"
             f"<i>Seleziona un'impostazione da modificare:</i>",
             chat_id=chat_id,
@@ -1999,6 +2108,30 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
             f"<b>Esempio:</b> <code>45.5231 8.8742</code>\n\n"
             f"<i>Oppure invia /annulla per annullare.</i>",
             chat_id=chat_id
+        )
+
+    # ── Imposta Ambito Regionale (Regional Scope) ───────────────────────────
+    elif data == "set_scope":
+        await ack()
+        chat_pending_input[chat_id] = "set_scope"
+        cur_scope = node_info.get("regional_scope", "it")
+        await send_telegram(
+            f"🌐 <b>Ambito Regionale Attuale:</b> <code>{cur_scope.upper()}</code>\n\n"
+            f"Invia la nuova sigla di ambito regionale (es: <code>it</code> per Italia, <code>eu</code> per Europa, oppure <code>none</code> per disattivare):\n\n"
+            f"<i>Standard MeshCore Italia: <b>it</b></i>\n\n"
+            f"<i>Oppure invia /annulla per annullare.</i>",
+            chat_id=chat_id
+        )
+
+    # ── Toggle Auto-Responder Echo ──────────────────────────────────────────
+    elif data == "toggle_autoresponder":
+        AUTO_RESPONDER_ENABLED = not AUTO_RESPONDER_ENABLED
+        st_text = "🟢 ATTIVATO" if AUTO_RESPONDER_ENABLED else "🔴 DISATTIVATO"
+        await ack(f"Echo Bot {st_text}")
+        await send_telegram(
+            f"🤖 <b>Auto-Responder LoRa {st_text}!</b>",
+            chat_id=chat_id,
+            reply_markup=build_settings_keyboard()
         )
 
     # ── Invia beacon advert ─────────────────────────────────────────────────
@@ -2212,6 +2345,38 @@ async def telegram_polling_loop():
                                         chat_id=chat_id,
                                         message_thread_id=thread_id
                                     )
+
+                    elif text.startswith("/scope") or text.startswith("/regione") or text.startswith("/regional_scope"):
+                        parts = text.split(maxsplit=1)
+                        if len(parts) < 2:
+                            cur_scope = node_info.get("regional_scope", "it")
+                            await send_telegram(
+                                f"🌐 <b>Ambito Regionale MeshCore:</b> <code>{cur_scope.upper()}</code>\n"
+                                f"Filtra e indirizza i pacchetti mesh nell'ambito regionale (standard MeshCore Italia: <code>it</code>).\n\n"
+                                f"Per modificarlo scrivi: <code>/scope it</code> oppure usa il menu <code>/menu</code> ➔ Impostazioni.",
+                                chat_id=chat_id,
+                                reply_markup=build_settings_keyboard(),
+                                message_thread_id=thread_id
+                            )
+                        else:
+                            new_scope = parts[1].strip().lower()
+                            node_info["regional_scope"] = new_scope
+                            set_node_setting("regional_scope", new_scope)
+                            if active_heltec_ws:
+                                try:
+                                    await send_to_heltec(f"region default {new_scope}\r\n".encode("utf-8"))
+                                    await asyncio.sleep(0.05)
+                                    await send_to_heltec(b"region save\r\n")
+                                except Exception:
+                                    pass
+                            await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                            await send_telegram(
+                                f"✅ <b>Ambito Regionale impostato su:</b> <code>{new_scope.upper()}</code>\n"
+                                f"Configurazione salvata e inviata alla scheda Heltec V3!",
+                                chat_id=chat_id,
+                                reply_markup=build_settings_keyboard(),
+                                message_thread_id=thread_id
+                            )
 
                     elif text.startswith("/canali") or text.startswith("/channels"):
                         ch_lines = []
@@ -2429,6 +2594,27 @@ async def telegram_polling_loop():
                                     await send_telegram(
                                         "⚠️ Formato non valido. Usa:\n<code>LATITUDINE LONGITUDINE</code>\nEsempio: <code>45.5231 8.8742</code>",
                                         chat_id=chat_id, reply_markup=build_settings_keyboard()
+                                    )
+
+                            elif pending == "set_scope":
+                                new_scope = text.strip().lower()
+                                if new_scope:
+                                    node_info["regional_scope"] = new_scope
+                                    set_node_setting("regional_scope", new_scope)
+                                    if active_heltec_ws:
+                                        try:
+                                            await send_to_heltec(f"region default {new_scope}\r\n".encode("utf-8"))
+                                            await asyncio.sleep(0.05)
+                                            await send_to_heltec(b"region save\r\n")
+                                        except Exception:
+                                            pass
+                                    await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
+                                    await send_telegram(
+                                        f"✅ <b>Ambito Regionale impostato:</b> <code>{new_scope.upper()}</code>\n"
+                                        f"Configurazione salvata e inviata alla scheda Heltec V3.",
+                                        chat_id=chat_id,
+                                        reply_markup=build_settings_keyboard(),
+                                        message_thread_id=thread_id
                                     )
 
                             continue  # Skip radio forwarding when handling settings input

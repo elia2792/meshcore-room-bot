@@ -1248,6 +1248,9 @@ def get_web_client_html() -> str:
                         <span class="pulse-dot"></span>
                         <span id="connBadgeText">DISCONNESSO</span>
                     </span>
+                    <span id="scopeBadge" class="status-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-weight: 700; text-transform: uppercase;">
+                        🌐 <span id="nodeScopeDisplay">IT</span>
+                    </span>
                 </div>
                 <div class="brand-node">
                     <span id="nodeNameDisplay">Buscate</span> • <span id="radioFreqDisplay">869.618 MHz</span>
@@ -1439,8 +1442,13 @@ def get_web_client_html() -> str:
                             <input type="number" step="0.00001" id="cfgLon" class="form-control" placeholder="es. 8.814" />
                         </div>
                     </div>
+                    <div class="form-row">
+                        <label>Ambito Regionale (Regional Scope)</label>
+                        <input type="text" id="cfgScope" class="form-control" value="it" placeholder="es. it (Italia), eu (Europa)" />
+                        <div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 4px;">Filtra e indirizza i pacchetti mesh nell'ambito regionale (standard MeshCore Italia: <b>it</b>).</div>
+                    </div>
                     <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                        <button id="saveNodeBtn" class="btn-action" style="flex:1;">💾 Salva Nome & GPS</button>
+                        <button id="saveNodeBtn" class="btn-action" style="flex:1;">💾 Salva Identità & Scope</button>
                         <button id="sendAdvertBtn" class="btn-action btn-secondary" style="flex:1;">📢 Invia Beacon Ora</button>
                     </div>
                 </div>
@@ -2307,6 +2315,9 @@ def get_web_client_html() -> str:
             }
             document.getElementById("nodeNameDisplay").textContent = nodeInfo.name || "Buscate";
             document.getElementById("radioFreqDisplay").textContent = (nodeInfo.freq_mhz || 869.618) + " MHz";
+            if (document.getElementById("nodeScopeDisplay")) {
+                document.getElementById("nodeScopeDisplay").textContent = (nodeInfo.regional_scope || "IT").toUpperCase();
+            }
         }
 
         // Render Channel Chips
@@ -2635,6 +2646,7 @@ def get_web_client_html() -> str:
             if (nodeInfo.name) document.getElementById("cfgNodeName").value = nodeInfo.name;
             if (nodeInfo.lat) document.getElementById("cfgLat").value = nodeInfo.lat;
             if (nodeInfo.lon) document.getElementById("cfgLon").value = nodeInfo.lon;
+            if (document.getElementById("cfgScope")) document.getElementById("cfgScope").value = nodeInfo.regional_scope || "it";
             if (nodeInfo.model) document.getElementById("cfgDevModel").textContent = nodeInfo.model;
             if (nodeInfo.firmware) document.getElementById("cfgDevFw").textContent = nodeInfo.firmware;
         }
@@ -2935,18 +2947,20 @@ def get_web_client_html() -> str:
             const name = document.getElementById("cfgNodeName").value.trim();
             const lat = parseFloat(document.getElementById("cfgLat").value) || null;
             const lon = parseFloat(document.getElementById("cfgLon").value) || null;
+            const scope = document.getElementById("cfgScope") ? document.getElementById("cfgScope").value.trim().toLowerCase() : "";
 
             if (socket && socket.readyState === WebSocket.OPEN) {
                 if (name) socket.send(JSON.stringify({ action: "set_advert_name", name: name }));
                 if (lat && lon) socket.send(JSON.stringify({ action: "set_advert_latlon", lat: lat, lon: lon }));
+                if (scope) socket.send(JSON.stringify({ action: "set_scope", scope: scope }));
             } else {
                 fetch("/api/settings/node", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name: name, lat: lat, lon: lon })
+                    body: JSON.stringify({ name: name, lat: lat, lon: lon, scope: scope })
                 });
             }
-            showToast("Nome e posizione inviati alla scheda...", true);
+            showToast("Parametri inviati alla scheda...", true);
         });
 
         document.getElementById("sendAdvertBtn").addEventListener("click", () => {
