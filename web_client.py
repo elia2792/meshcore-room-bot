@@ -1964,7 +1964,7 @@ def get_web_client_html() -> str:
     <script>
         // State
         let activeTab = "tabMessages";
-        let activeChannelIdx = 0;
+        let activeChannelIdx = -1;
         let channels = { 0: "Public" };
         let nodeInfo = { name: "Buscate", freq_mhz: 869.618, bw_khz: 62.5, sf: 8, cr: 8, tx_power: 20 };
         let heardNodes = [];
@@ -1972,6 +1972,7 @@ def get_web_client_html() -> str:
         const STORAGE_KEY = "meshcore_room_messages_v3";
 
         function getMsgKey(m) {
+            if (m.id) return `id_${m.id}`;
             if (m.client_id) return `cid_${m.client_id}`;
             return `${m.timestamp || ''}_${m.sender || ''}_${m.content || ''}`;
         }
@@ -2000,6 +2001,8 @@ def get_web_client_html() -> str:
 
             importFromKey(STORAGE_KEY);
             importFromKey("meshcore_room_messages");
+            importFromKey("meshcore_room_messages_v1");
+            importFromKey("meshcore_room_messages_v2");
             importFromKey("meshcore_chat_messages_v1");
 
             combined.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
@@ -2986,10 +2989,11 @@ def get_web_client_html() -> str:
 
             let filtered = activeChannelIdx === -1 ? messages : messages.filter(m => {
                 if (m.channel_idx !== undefined && m.channel_idx !== null) {
-                    return Number(m.channel_idx) === Number(activeChannelIdx);
+                    if (Number(m.channel_idx) === Number(activeChannelIdx)) return true;
                 }
-                const chName = channels[activeChannelIdx];
-                return m.channel === chName || m.channel === `Canale ${activeChannelIdx}` || m.channel === `Canale #${activeChannelIdx}`;
+                const chName = (channels[activeChannelIdx] || "").trim().toLowerCase();
+                const mCh = (m.channel || "").trim().toLowerCase();
+                return mCh === chName || mCh === `canale ${activeChannelIdx}` || mCh === `canale #${activeChannelIdx}` || (activeChannelIdx === 0 && (!mCh || mCh === "public" || mCh === "radio" || mCh === "direct"));
             });
 
             if (chatSearchQuery) {

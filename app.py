@@ -1075,11 +1075,11 @@ async def home():
 
 @app.get("/app", response_class=HTMLResponse)
 async def web_app():
-    return HTMLResponse(get_web_client_html())
+    return HTMLResponse(get_web_client_html(), headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
 
 @app.get("/web", response_class=HTMLResponse)
 async def web_alias():
-    return HTMLResponse(get_web_client_html())
+    return HTMLResponse(get_web_client_html(), headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
 
 @app.websocket("/ws/client")
 async def websocket_client_endpoint(websocket: WebSocket):
@@ -1589,21 +1589,24 @@ async def api_manifest():
 @app.get("/sw.js")
 async def api_service_worker():
     sw_code = """
-const CACHE_NAME = 'meshcore-cache-v2';
+const CACHE_NAME = 'meshcore-cache-v5';
 self.addEventListener('install', (e) => {
     self.skipWaiting();
 });
 self.addEventListener('activate', (e) => {
-    e.waitUntil(self.clients.claim());
+    e.waitUntil(
+        caches.keys().then((keys) => {
+            return Promise.all(keys.map((k) => caches.delete(k)));
+        }).then(() => self.clients.claim())
+    );
 });
 self.addEventListener('fetch', (e) => {
-    // Network first for real-time WebSocket and LoRa data
     e.respondWith(
         fetch(e.request).catch(() => caches.match(e.request))
     );
 });
 """
-    return Response(content=sw_code, media_type="application/javascript")
+    return Response(content=sw_code, media_type="application/javascript", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 @app.post("/api/nodes/scan")
 async def api_nodes_scan():
