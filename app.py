@@ -1101,6 +1101,7 @@ async def websocket_client_endpoint(websocket: WebSocket):
             data = await websocket.receive_json()
             action = data.get("action")
             if action == "send_message":
+                client_id = data.get("client_id")
                 ch_idx = int(data.get("channel_idx", 0))
                 text = str(data.get("text", "")).strip()
                 sender = str(data.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
