@@ -71,8 +71,17 @@ node_info: Dict[str, Any] = {
     "tx_power": 20,
     "lat": None,
     "lon": None,
+    "altitude_m": 195,
     "max_channels": 40,
-    "regional_scope": "it"
+    "regional_scope": "it",
+    "beacon_interval_min": 0,
+    "beacon_flood": 1,
+    "node_role": "client",
+    "preamble_len": 8,
+    "sync_word": "0x2B",
+    "gps_share_mode": "manual",
+    "gps_privacy_blur": 0,
+    "max_hops": 3
 }
 
 def decode_meshcore_hops(raw_hops: Optional[int]) -> int:
@@ -929,12 +938,48 @@ async def keep_alive_loop():
             print(f"[KeepAlive] errore: {e}")
         await asyncio.sleep(600)  # ogni 10 minuti
 
+async def periodic_beacon_loop():
+    """Invia periodicamente un annuncio Beacon Advert se beacon_interval_min > 0."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            interval = int(node_info.get("beacon_interval_min", 0))
+            if interval > 0 and active_heltec_ws:
+                flood = int(node_info.get("beacon_flood", 1)) == 1
+                frame = build_send_self_advert_frame(flood=flood)
+                await send_to_heltec(frame)
+                print(f"[BeaconLoop] Auto beacon inviato (intervallo={interval}m, flood={flood})")
+                await asyncio.sleep(interval * 60)
+            else:
+                await asyncio.sleep(30)
+        except Exception as e:
+            print("Beacon loop error:", e)
+            await asyncio.sleep(30)
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
     node_info["regional_scope"] = get_node_setting("regional_scope", "it")
+    node_info["name"] = get_node_setting("name", node_info.get("name", "Buscate"))
+    try:
+        lat_s = get_node_setting("lat", "")
+        lon_s = get_node_setting("lon", "")
+        if lat_s: node_info["lat"] = float(lat_s)
+        if lon_s: node_info["lon"] = float(lon_s)
+    except Exception:
+        pass
+    node_info["altitude_m"] = int(get_node_setting("altitude_m", "195"))
+    node_info["beacon_interval_min"] = int(get_node_setting("beacon_interval_min", "0"))
+    node_info["beacon_flood"] = int(get_node_setting("beacon_flood", "1"))
+    node_info["node_role"] = get_node_setting("node_role", "client")
+    node_info["preamble_len"] = int(get_node_setting("preamble_len", "8"))
+    node_info["sync_word"] = get_node_setting("sync_word", "0x2B")
+    node_info["gps_share_mode"] = get_node_setting("gps_share_mode", "manual")
+    node_info["gps_privacy_blur"] = int(get_node_setting("gps_privacy_blur", "0"))
+    node_info["max_hops"] = int(get_node_setting("max_hops", "3"))
     asyncio.create_task(telegram_polling_loop())
     asyncio.create_task(periodic_heartbeat_loop())
+    asyncio.create_task(periodic_beacon_loop())
     asyncio.create_task(keep_alive_loop())
 
 @app.get("/health")
@@ -1205,6 +1250,17 @@ async def websocket_client_endpoint(websocket: WebSocket):
                     await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
                     await broadcast_telegram(f"🌐 <b>Ambito Regionale impostato da Web:</b> <code>{new_scope.upper()}</code>")
                     await websocket.send_json({"type": "action_result", "action": "set_scope", "success": True, "scope": new_scope})
+            elif action == "clear_contacts":
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("DELETE FROM heard_nodes")
+                    conn.commit()
+                    conn.close()
+                    await broadcast_to_browsers({"type": "nodes_list", "nodes": []})
+                    await websocket.send_json({"type": "action_result", "action": "clear_contacts", "success": True})
+                except Exception as e:
+                    await websocket.send_json({"type": "action_result", "action": "clear_contacts", "success": False, "error": str(e)})
             elif action == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
@@ -1232,6 +1288,19 @@ async def api_messages(limit: int = 50, channel: Optional[str] = None):
 @app.get("/api/nodes")
 async def api_nodes(limit: int = 100, direct_only: bool = False):
     return get_recent_heard_nodes(limit, direct_only=direct_only)
+
+@app.post("/api/nodes/clear")
+async def api_nodes_clear():
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM heard_nodes")
+        conn.commit()
+        conn.close()
+        await broadcast_to_browsers({"type": "nodes_list", "nodes": []})
+        return {"success": True}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.post("/api/send")
 async def api_send(request: Request):
@@ -1281,18 +1350,26 @@ async def api_settings_radio(request: Request):
     sf = int(body.get("sf", node_info.get("sf", 8)))
     cr = int(body.get("cr", node_info.get("cr", 8)))
     tx_power = int(body.get("tx_power", node_info.get("tx_power", 20)))
+    preamble_len = body.get("preamble_len")
+    sync_word = body.get("sync_word")
 
     frame_radio = build_set_radio_params_frame(freq, bw, sf, cr)
     sent_radio = await send_to_heltec(frame_radio)
     frame_tx = build_set_tx_power_frame(tx_power)
     sent_tx = await send_to_heltec(frame_tx)
 
-    if sent_radio or sent_tx:
+    if sent_radio or sent_tx or preamble_len is not None or sync_word is not None:
         node_info["freq_mhz"] = freq
         node_info["bw_khz"] = bw
         node_info["sf"] = sf
         node_info["cr"] = cr
         node_info["tx_power"] = tx_power
+        if preamble_len is not None:
+            node_info["preamble_len"] = int(preamble_len)
+            set_node_setting("preamble_len", str(int(preamble_len)))
+        if sync_word is not None:
+            node_info["sync_word"] = str(sync_word)
+            set_node_setting("sync_word", str(sync_word))
         await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
         await broadcast_telegram(f"⚙️ <b>Parametri Radio aggiornati via Web:</b>\n{freq} MHz | BW {bw} kHz | SF{sf} CR{cr} | {tx_power} dBm")
 
@@ -1307,6 +1384,14 @@ async def api_settings_node(request: Request):
     name = str(body.get("name", "")).strip()
     lat = body.get("lat")
     lon = body.get("lon")
+    altitude_m = body.get("altitude_m")
+    scope = body.get("scope") or body.get("regional_scope")
+    beacon_interval_min = body.get("beacon_interval_min")
+    beacon_flood = body.get("beacon_flood")
+    node_role = body.get("node_role")
+    gps_share_mode = body.get("gps_share_mode")
+    gps_privacy_blur = body.get("gps_privacy_blur")
+    max_hops = body.get("max_hops")
 
     sent = False
     if name:
@@ -1314,6 +1399,7 @@ async def api_settings_node(request: Request):
         sent = await send_to_heltec(frame_name)
         if sent:
             node_info["name"] = name
+            set_node_setting("name", name)
             await broadcast_telegram(f"🏷️ <b>Nome nodo aggiornato:</b> <b>{name}</b>")
 
     if lat is not None and lon is not None:
@@ -1324,10 +1410,18 @@ async def api_settings_node(request: Request):
             if sent_ll:
                 node_info["lat"] = f_lat
                 node_info["lon"] = f_lon
+                set_node_setting("lat", str(f_lat))
+                set_node_setting("lon", str(f_lon))
         except Exception:
             pass
 
-    scope = body.get("scope") or body.get("regional_scope")
+    if altitude_m is not None:
+        try:
+            node_info["altitude_m"] = int(altitude_m)
+            set_node_setting("altitude_m", str(int(altitude_m)))
+        except Exception:
+            pass
+
     if scope:
         clean_scope = str(scope).strip().lower()
         node_info["regional_scope"] = clean_scope
@@ -1341,8 +1435,32 @@ async def api_settings_node(request: Request):
                 pass
         await broadcast_telegram(f"🌐 <b>Ambito Regionale aggiornato da Web:</b> <code>{clean_scope.upper()}</code>")
 
+    if beacon_interval_min is not None:
+        node_info["beacon_interval_min"] = int(beacon_interval_min)
+        set_node_setting("beacon_interval_min", str(int(beacon_interval_min)))
+
+    if beacon_flood is not None:
+        node_info["beacon_flood"] = int(beacon_flood)
+        set_node_setting("beacon_flood", str(int(beacon_flood)))
+
+    if node_role is not None:
+        node_info["node_role"] = str(node_role).strip()
+        set_node_setting("node_role", str(node_role).strip())
+
+    if gps_share_mode is not None:
+        node_info["gps_share_mode"] = str(gps_share_mode).strip()
+        set_node_setting("gps_share_mode", str(gps_share_mode).strip())
+
+    if gps_privacy_blur is not None:
+        node_info["gps_privacy_blur"] = int(gps_privacy_blur)
+        set_node_setting("gps_privacy_blur", str(int(gps_privacy_blur)))
+
+    if max_hops is not None:
+        node_info["max_hops"] = int(max_hops)
+        set_node_setting("max_hops", str(int(max_hops)))
+
     await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
-    return {"success": sent or bool(scope), "node_info": node_info}
+    return {"success": True, "node_info": node_info}
 
 @app.get("/api/settings/scope")
 async def api_get_scope():

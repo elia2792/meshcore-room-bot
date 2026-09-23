@@ -44,6 +44,192 @@ def get_web_client_html() -> str:
             --ack-ok: #10b981;
         }
 
+        /* ── THEMES ── */
+        [data-theme="oled"] {
+            --bg: #000000;
+            --surface: #0a0a0a;
+            --surface-card: #121212;
+            --surface-hover: #1a1a1a;
+            --border: #222222;
+            --border-highlight: #333333;
+            --text-main: #f5f5f5;
+            --text-muted: #a3a3a3;
+            --text-dim: #737373;
+            --primary: #10b981;
+            --primary-dark: #059669;
+            --primary-glow: rgba(16, 185, 129, 0.2);
+            --accent-blue: #38bdf8;
+            --accent-purple: #c084fc;
+            --accent-amber: #fbbf24;
+        }
+
+        [data-theme="amber"] {
+            --bg: #0c0800;
+            --surface: #181102;
+            --surface-card: #261905;
+            --surface-hover: #3b2708;
+            --border: #4a320a;
+            --border-highlight: #6e4a0f;
+            --text-main: #ffdf9e;
+            --text-muted: #d4a962;
+            --text-dim: #99753d;
+            --primary: #f59e0b;
+            --primary-dark: #d97706;
+            --primary-glow: rgba(245, 158, 11, 0.3);
+            --accent-blue: #fbbf24;
+            --accent-purple: #f59e0b;
+            --accent-amber: #fbbf24;
+        }
+
+        [data-theme="matrix"] {
+            --bg: #020c04;
+            --surface: #051a0a;
+            --surface-card: #092610;
+            --surface-hover: #0e3b19;
+            --border: #134f22;
+            --border-highlight: #1b6e30;
+            --text-main: #a3ffb8;
+            --text-muted: #5adb75;
+            --text-dim: #388a49;
+            --primary: #00ff66;
+            --primary-dark: #00cc52;
+            --primary-glow: rgba(0, 255, 102, 0.25);
+            --accent-blue: #34d399;
+            --accent-purple: #10b981;
+            --accent-amber: #eab308;
+        }
+
+        /* ── S-METER RF SIGNAL QUALITY BARS ── */
+        .s-meter-bar-group {
+            display: inline-flex;
+            align-items: flex-end;
+            gap: 2px;
+            height: 12px;
+            vertical-align: middle;
+            margin-right: 4px;
+        }
+        .s-bar {
+            width: 3px;
+            border-radius: 1px;
+            background: var(--border-highlight);
+            transition: all 0.2s ease;
+        }
+        .s-bar.h-1 { height: 3px; }
+        .s-bar.h-2 { height: 5px; }
+        .s-bar.h-3 { height: 7px; }
+        .s-bar.h-4 { height: 9px; }
+        .s-bar.h-5 { height: 12px; }
+        .s-bar.active-green { background: #10b981; }
+        .s-bar.active-yellow { background: #eab308; }
+        .s-bar.active-orange { background: #f97316; }
+        .s-bar.active-red { background: #ef4444; }
+
+        /* ── BEARING & DISTANCE BADGE ── */
+        .bearing-badge {
+            background: rgba(168, 85, 247, 0.15);
+            color: #c084fc;
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            border-radius: 9999px;
+            padding: 2px 8px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* ── NODE CUSTOM NOTE ── */
+        .node-note-tag {
+            font-size: 0.73rem;
+            color: var(--accent-amber);
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px dashed rgba(245, 158, 11, 0.3);
+            border-radius: 6px;
+            padding: 2px 6px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            margin-top: 3px;
+            width: fit-content;
+        }
+        .node-note-tag:hover {
+            background: rgba(245, 158, 11, 0.2);
+            border-color: var(--accent-amber);
+        }
+
+        /* ── MACRO STRIP (1-TAP TRANSMIT) ── */
+        .macro-bar {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding: 4px 2px 6px 2px;
+            scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
+        }
+        .macro-bar::-webkit-scrollbar { display: none; }
+        .macro-btn {
+            background: var(--surface-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-radius: 9999px;
+            padding: 4px 11px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .macro-btn:hover, .macro-btn:active {
+            background: var(--surface-hover);
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: translateY(-1px);
+        }
+
+        /* ── THEME SELECTOR GRID ── */
+        .theme-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .theme-card {
+            border: 2px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 8px;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+            background: var(--surface-card);
+            text-align: center;
+        }
+        .theme-card:hover {
+            border-color: var(--border-highlight);
+            transform: translateY(-2px);
+        }
+        .theme-card.active {
+            border-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+        .theme-swatch {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
@@ -1251,6 +1437,9 @@ def get_web_client_html() -> str:
                     <span id="scopeBadge" class="status-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-weight: 700; text-transform: uppercase;">
                         🌐 <span id="nodeScopeDisplay">IT</span>
                     </span>
+                    <span id="pingRttDisplay" class="status-badge" style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); font-family: monospace; font-size: 0.72rem;" title="Latenza RTT WebSocket client-server">
+                        ⚡ -- ms
+                    </span>
                 </div>
                 <div class="brand-node">
                     <span id="nodeNameDisplay">Buscate</span> • <span id="radioFreqDisplay">869.618 MHz</span>
@@ -1298,6 +1487,15 @@ def get_web_client_html() -> str:
                         <div id="replyToSnippet" class="reply-bar-snippet"></div>
                     </div>
                     <button id="cancelReplyBtn" class="reply-bar-close" title="Annulla risposta">✕</button>
+                </div>
+
+                <!-- 1-Tap Fast Transmit Macro Strip -->
+                <div class="macro-bar">
+                    <button class="macro-btn" type="button" onclick="sendQuickMacro('👋 Ciao a tutti!')">👋 Ciao</button>
+                    <button class="macro-btn" type="button" onclick="sendQuickMacro('📶 73 de Buscate')">📶 73 de Buscate</button>
+                    <button class="macro-btn" type="button" onclick="sendQuickMacro('📡 Test RF / !ping')">📡 !ping</button>
+                    <button class="macro-btn" type="button" onclick="sendQuickMacro('📍 QRV (In ascolto)')">📍 QRV</button>
+                    <button class="macro-btn" type="button" onclick="sendQuickMacro('⚠️ SOS / Emergenza')">⚠️ SOS</button>
                 </div>
 
                 <div class="chat-input-row">
@@ -1370,10 +1568,11 @@ def get_web_client_html() -> str:
             </div>
         </div>
 
-        <!-- TAB 4: IMPOSTAZIONI RADIO & DISPOSITIVO -->
+        <!-- TAB 4: IMPOSTAZIONI RADIO & DISPOSITIVO COMPLETO -->
         <div id="tabSettings" class="tab-screen">
             <div class="content-scroll">
-                <!-- Radio Settings -->
+
+                <!-- 1. Radio LoRa Settings (SX1262) -->
                 <div class="settings-card">
                     <div class="settings-card-title">📻 Parametri Radio LoRa (SX1262)</div>
                     <div class="form-grid-2">
@@ -1384,7 +1583,7 @@ def get_web_client_html() -> str:
                         <div class="form-row">
                             <label>Bandwidth (kHz)</label>
                             <select id="cfgBw" class="form-control">
-                                <option value="62.5">62.5 kHz (Default EU)</option>
+                                <option value="62.5">62.5 kHz (Default EU868)</option>
                                 <option value="125">125 kHz</option>
                                 <option value="250">250 kHz</option>
                                 <option value="500">500 kHz</option>
@@ -1395,12 +1594,12 @@ def get_web_client_html() -> str:
                         <div class="form-row">
                             <label>Spreading Factor (SF)</label>
                             <select id="cfgSf" class="form-control">
-                                <option value="7">SF7 (Più veloce)</option>
-                                <option value="8">SF8 (Default)</option>
+                                <option value="7">SF7 (Massima velocità)</option>
+                                <option value="8">SF8 (Standard MeshCore)</option>
                                 <option value="9">SF9</option>
                                 <option value="10">SF10</option>
                                 <option value="11">SF11</option>
-                                <option value="12">SF12 (Lungo raggio)</option>
+                                <option value="12">SF12 (Massima portata RF)</option>
                             </select>
                         </div>
                         <div class="form-row">
@@ -1409,51 +1608,201 @@ def get_web_client_html() -> str:
                                 <option value="5">4/5</option>
                                 <option value="6">4/6</option>
                                 <option value="7">4/7</option>
-                                <option value="8">4/8 (Massima robustezza)</option>
+                                <option value="8">4/8 (Massima correzione FEC)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Potenza TX (dBm)</label>
+                            <select id="cfgTxPower" class="form-control">
+                                <option value="14">14 dBm (25 mW)</option>
+                                <option value="17">17 dBm (50 mW)</option>
+                                <option value="20">20 dBm (100 mW - Normale)</option>
+                                <option value="22">22 dBm (160 mW - Massima)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Preamble Length</label>
+                            <select id="cfgPreamble" class="form-control">
+                                <option value="8">8 simboli (Standard)</option>
+                                <option value="12">12 simboli</option>
+                                <option value="16">16 simboli (Ambienti rumorosi)</option>
                             </select>
                         </div>
                     </div>
                     <div class="form-row">
-                        <label>Potenza di Trasmissione (TX Power dBm)</label>
-                        <select id="cfgTxPower" class="form-control">
-                            <option value="14">14 dBm (25 mW)</option>
-                            <option value="17">17 dBm (50 mW)</option>
-                            <option value="20">20 dBm (100 mW - Normale)</option>
-                            <option value="22">22 dBm (160 mW - Massima)</option>
+                        <label>Sync Word / Network ID</label>
+                        <select id="cfgSyncWord" class="form-control">
+                            <option value="0x2B">0x2B (Pubblico MeshCore / Rete Standard)</option>
+                            <option value="0x12">0x12 (Privato SX126x)</option>
+                            <option value="0x34">0x34 (LoRaWAN)</option>
                         </select>
                     </div>
                     <button id="saveRadioBtn" class="btn-action">💾 Applica Parametri Radio</button>
                 </div>
 
-                <!-- Node Identity -->
+                <!-- 2. Node Identity, Beacon & Scope -->
                 <div class="settings-card">
                     <div class="settings-card-title">🏷️ Identità Nodo & Beacon Advert</div>
                     <div class="form-row">
-                        <label>Nome del Nodo</label>
-                        <input type="text" id="cfgNodeName" class="form-control" value="Buscate" />
+                        <label>Nome del Nodo (Callsign / Nickname)</label>
+                        <input type="text" id="cfgNodeName" class="form-control" value="Buscate" maxlength="31" />
                     </div>
                     <div class="form-grid-2">
                         <div class="form-row">
                             <label>Latitudine GPS</label>
-                            <input type="number" step="0.00001" id="cfgLat" class="form-control" placeholder="es. 45.526" />
+                            <input type="number" step="0.00001" id="cfgLat" class="form-control" placeholder="es. 45.548" />
                         </div>
                         <div class="form-row">
                             <label>Longitudine GPS</label>
-                            <input type="number" step="0.00001" id="cfgLon" class="form-control" placeholder="es. 8.814" />
+                            <input type="number" step="0.00001" id="cfgLon" class="form-control" placeholder="es. 8.816" />
+                        </div>
+                    </div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Altitudine (metri s.l.m.)</label>
+                            <input type="number" id="cfgAltitude" class="form-control" value="195" placeholder="es. 195" />
+                        </div>
+                        <div class="form-row">
+                            <label>Ambito Regionale (Scope)</label>
+                            <input type="text" id="cfgScope" class="form-control" value="it" placeholder="es. it (Italia)" />
+                        </div>
+                    </div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Ruolo del Nodo</label>
+                            <select id="cfgNodeRole" class="form-control">
+                                <option value="client">Client / Companion (Normale)</option>
+                                <option value="repeater">Ripetitore / Router (Inoltro)</option>
+                                <option value="room_server">Room Server / BBS</option>
+                                <option value="tracker">Tracker GPS (Solo beacon)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Intervallo Beacon Advert</label>
+                            <select id="cfgBeaconInterval" class="form-control">
+                                <option value="0">Disattivato (Solo manuale)</option>
+                                <option value="5">Ogni 5 minuti</option>
+                                <option value="15">Ogni 15 minuti</option>
+                                <option value="30">Ogni 30 minuti</option>
+                                <option value="60">Ogni 1 ora</option>
+                                <option value="120">Ogni 2 ore</option>
+                            </select>
                         </div>
                     </div>
                     <div class="form-row">
-                        <label>Ambito Regionale (Regional Scope)</label>
-                        <input type="text" id="cfgScope" class="form-control" value="it" placeholder="es. it (Italia), eu (Europa)" />
-                        <div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 4px;">Filtra e indirizza i pacchetti mesh nell'ambito regionale (standard MeshCore Italia: <b>it</b>).</div>
+                        <label>Modalità Annuncio Beacon</label>
+                        <select id="cfgBeaconFlood" class="form-control">
+                            <option value="1">Flood Mesh (Con ripetitori e salti)</option>
+                            <option value="0">Zero-Hop Diretto RF (Solo vicini d'ascolto)</option>
+                        </select>
                     </div>
-                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                        <button id="saveNodeBtn" class="btn-action" style="flex:1;">💾 Salva Identità & Scope</button>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
+                        <button id="saveNodeBtn" class="btn-action" style="flex:1;">💾 Salva Identità & Beacon</button>
                         <button id="sendAdvertBtn" class="btn-action btn-secondary" style="flex:1;">📢 Invia Beacon Ora</button>
                     </div>
                 </div>
 
-                <!-- Mappa Nodi & Copertura LoRa (Richiesta Utente) -->
+                <!-- 3. Telemetry & GPS Privacy -->
+                <div class="settings-card">
+                    <div class="settings-card-title">📍 Telemetria & Privacy Posizione GPS</div>
+                    <div class="form-row">
+                        <label>Condivisione Posizione GPS nei Messaggi</label>
+                        <select id="cfgGpsShareMode" class="form-control">
+                            <option value="manual">Manuale (1-Tap dal pulsante in chat)</option>
+                            <option value="always">Automatica (Allega sempre posizione)</option>
+                            <option value="moving">In Movimento (Solo se posizione varia)</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label>Protezione Privacy Coordinate</label>
+                        <select id="cfgGpsPrivacyBlur" class="form-control">
+                            <option value="0">Coordinate Esatte (GPS Alta Precisione)</option>
+                            <option value="1">Sfocatura Privacy (~1 km blur anti-triangolazione)</option>
+                        </select>
+                    </div>
+                    <div style="font-size:0.78rem; color:var(--text-muted); background:var(--surface); padding:8px 12px; border-radius:8px; border:1px solid var(--border);">
+                        🔋 <b>Stato Alimentazione Heltec:</b> <span style="color:var(--primary); font-weight:600;">USB Connesso / Alimentato</span> • 4.15V
+                    </div>
+                    <button id="saveTelemetryBtn" class="btn-action" style="margin-top:8px;">💾 Salva Opzioni Telemetria</button>
+                </div>
+
+                <!-- 4. Mesh Routing Policy -->
+                <div class="settings-card">
+                    <div class="settings-card-title">🔀 Routing Mesh & Limite Salti (Hop Limit)</div>
+                    <div class="form-grid-2">
+                        <div class="form-row">
+                            <label>Limite Salti (Max Hop TTL)</label>
+                            <select id="cfgMaxHops" class="form-control">
+                                <option value="1">1 Salto (Diretto RF + 1 ripetitore)</option>
+                                <option value="2">2 Salti</option>
+                                <option value="3" selected>3 Salti (Default consigliato EU868)</option>
+                                <option value="4">4 Salti (Copertura estesa)</option>
+                                <option value="5">5 Salti (Emergenza / Lungo raggio)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Finestra Deduplicazione Pacchetti</label>
+                            <select id="cfgDedupWindow" class="form-control">
+                                <option value="30">30 secondi</option>
+                                <option value="60" selected>60 secondi</option>
+                                <option value="120">120 secondi</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button id="saveRoutingBtn" class="btn-action">💾 Salva Politica Routing</button>
+                </div>
+
+                <!-- 5. Appearance & Themes -->
+                <div class="settings-card">
+                    <div class="settings-card-title">🎨 Aspetto Visivo & Temi Interfaccia</div>
+                    <p style="font-size:0.8rem; color:var(--text-muted);">
+                        Personalizza i colori e il contrasto della Web App in base al tuo display o ambiente operativo.
+                    </p>
+                    <div class="theme-grid">
+                        <div class="theme-card active" data-theme="cyber" onclick="setAppTheme('cyber')">
+                            <div class="theme-swatch" style="background:#090d16; border-color:#10b981;">🛸</div>
+                            <b style="font-size:0.82rem;">Cyber Dark</b>
+                            <span style="font-size:0.7rem; color:var(--text-dim);">Neon Smeraldo</span>
+                        </div>
+                        <div class="theme-card" data-theme="oled" onclick="setAppTheme('oled')">
+                            <div class="theme-swatch" style="background:#000000; border-color:#444444;">⬛</div>
+                            <b style="font-size:0.82rem;">OLED Black</b>
+                            <span style="font-size:0.7rem; color:var(--text-dim);">Nero Assoluto</span>
+                        </div>
+                        <div class="theme-card" data-theme="amber" onclick="setAppTheme('amber')">
+                            <div class="theme-swatch" style="background:#181102; border-color:#f59e0b;">📻</div>
+                            <b style="font-size:0.82rem;">Tactical Amber</b>
+                            <span style="font-size:0.7rem; color:var(--text-dim);">Fosfori Ambra</span>
+                        </div>
+                        <div class="theme-card" data-theme="matrix" onclick="setAppTheme('matrix')">
+                            <div class="theme-swatch" style="background:#051a0a; border-color:#00ff66;">🟢</div>
+                            <b style="font-size:0.82rem;">Matrix Green</b>
+                            <span style="font-size:0.7rem; color:var(--text-dim);">Terminale CRT</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 6. Backup & Data Export -->
+                <div class="settings-card">
+                    <div class="settings-card-title">💾 Backup & Esportazione Dati</div>
+                    <p style="font-size:0.8rem; color:var(--text-muted);">
+                        Scarica l'archivio completo dei messaggi chat, della tabella nodi o salva un backup di configurazione in formato standard CSV/JSON.
+                    </p>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; margin-top:8px;">
+                        <button id="exportMsgCsvBtn" class="btn-action btn-secondary" onclick="exportMessages('csv')">📥 Esporta Chat (CSV)</button>
+                        <button id="exportMsgJsonBtn" class="btn-action btn-secondary" onclick="exportMessages('json')">📥 Esporta Chat (JSON)</button>
+                        <button id="exportNodesCsvBtn" class="btn-action btn-secondary" onclick="exportNodes('csv')">📥 Esporta Nodi (CSV)</button>
+                        <button id="backupConfigBtn" class="btn-action btn-secondary" onclick="exportBackupConfig()">💾 Backup Configurazione</button>
+                    </div>
+                    <div style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                        <label style="font-size:0.8rem; color:var(--text-muted); display:block; margin-bottom:6px;">Ripristina Configurazione da File JSON:</label>
+                        <input type="file" id="restoreConfigInput" accept=".json" class="form-control" onchange="importRestoreConfig(event)" style="padding:6px 12px; font-size:0.8rem;" />
+                    </div>
+                </div>
+
+                <!-- 7. Mappa Nodi & Copertura LoRa -->
                 <div class="settings-card">
                     <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:8px;">
                         <div class="settings-card-title" style="border-bottom:none; padding-bottom:0; margin:0;">
@@ -1501,7 +1850,7 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
-                <!-- Trova Nodi Vicini (Discovery) -->
+                <!-- 8. Trova Nodi Vicini (Discovery) -->
                 <div class="settings-card">
                     <div class="settings-card-title">🔍 Trova Nodi Vicini & Scansione Mesh</div>
                     <p style="font-size:0.8rem; color:var(--text-muted);">
@@ -1513,7 +1862,7 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
-                <!-- Auto-Responder / Echo Test Card -->
+                <!-- 9. Auto-Responder / Echo Test Card -->
                 <div class="settings-card">
                     <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:8px;">
                         <div class="settings-card-title" style="border-bottom:none; padding-bottom:0; margin:0;">
@@ -1532,7 +1881,7 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
-                <!-- 24h Radio Traffic Card -->
+                <!-- 10. 24h Radio Traffic Card -->
                 <div class="settings-card">
                     <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding-bottom:8px;">
                         <div class="settings-card-title" style="border-bottom:none; padding-bottom:0; margin:0;">
@@ -1550,18 +1899,20 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
-                <!-- Device Maintenance -->
+                <!-- 11. Device Maintenance & Operations -->
                 <div class="settings-card">
-                    <div class="settings-card-title">🛠️ Strumenti Dispositivo</div>
+                    <div class="settings-card-title">🛠️ Manutenzione Dispositivo & Operazioni</div>
                     <p style="font-size:0.8rem; color:var(--text-muted);">
                         Dispositivo: <b id="cfgDevModel">Heltec V3 (ESP32-S3)</b><br>
                         Firmware: <b id="cfgDevFw">MeshCore</b>
                     </p>
-                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;">
-                        <button id="syncTimeBtn" class="btn-action btn-secondary" style="flex:1;">⏱️ Sincronizza Ora</button>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:6px;">
+                        <button id="syncTimeBtn" class="btn-action btn-secondary" style="flex:1;">⏱️ Sincronizza Ora (RTC)</button>
+                        <button id="clearNodesBtn" class="btn-action btn-secondary" style="flex:1;" onclick="confirmClearContacts()">🗑️ Svuota Tabella Nodi</button>
                         <button id="rebootBtn" class="btn-action btn-danger" style="flex:1;">⚠️ Riavvia Heltec</button>
                     </div>
                 </div>
+
             </div>
         </div>
 
@@ -2163,6 +2514,232 @@ def get_web_client_html() -> str:
             return R * c;
         }
 
+        // Compass Bearing and Azimuth Angle Calculation
+        function calcBearing(lat1, lon1, lat2, lon2) {
+            if (lat1 === null || lon1 === null || lat2 === null || lon2 === null) return null;
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            const y = Math.sin(Δλ) * Math.cos(φ2);
+            const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+            let θ = Math.atan2(y, x) * 180 / Math.PI;
+            θ = (θ + 360) % 360;
+            const compassDirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+            const idx = Math.round(θ / 22.5) % 16;
+            return { deg: Math.round(θ), dir: compassDirs[idx] };
+        }
+
+        // S-Meter Signal Quality 5-Bar Generator
+        function renderSMeterBars(snr) {
+            if (snr === undefined || snr === null) {
+                return '';
+            }
+            const val = Number(snr);
+            let level = 1;
+            let colorClass = 'active-red';
+            if (val >= 6) {
+                level = 5;
+                colorClass = 'active-green';
+            } else if (val >= 0) {
+                level = 4;
+                colorClass = 'active-green';
+            } else if (val >= -8) {
+                level = 3;
+                colorClass = 'active-yellow';
+            } else if (val >= -15) {
+                level = 2;
+                colorClass = 'active-orange';
+            } else {
+                level = 1;
+                colorClass = 'active-red';
+            }
+
+            let barsHtml = '';
+            for (let i = 1; i <= 5; i++) {
+                const active = i <= level ? colorClass : '';
+                barsHtml += `<span class="s-bar h-${i} ${active}"></span>`;
+            }
+            return `<span class="s-meter-bar-group" title="Qualità Segnale RF (SNR: ${val > 0 ? '+' : ''}${val.toFixed(1)} dB)">${barsHtml}</span>`;
+        }
+
+        // Node Custom Notes / Aliases in LocalStorage
+        function getNodeNote(nodeName) {
+            try {
+                const notes = JSON.parse(localStorage.getItem("meshcore_node_notes") || "{}");
+                return notes[nodeName] || "";
+            } catch(e) { return ""; }
+        }
+        function setNodeNote(nodeName, note) {
+            try {
+                const notes = JSON.parse(localStorage.getItem("meshcore_node_notes") || "{}");
+                if (note && note.trim()) {
+                    notes[nodeName] = note.trim();
+                } else {
+                    delete notes[nodeName];
+                }
+                localStorage.setItem("meshcore_node_notes", JSON.stringify(notes));
+            } catch(e) {}
+        }
+        window.promptEditNodeNote = function(nodeName) {
+            const current = getNodeNote(nodeName);
+            const updated = prompt(`Note / Alias personale per "${nodeName}":\n(es. QTH Milano Nord, Ripetitore Penice, Antenna Yagi)`, current);
+            if (updated !== null) {
+                setNodeNote(nodeName, updated);
+                renderNodes();
+                showToast(`Nota per ${nodeName} salvata.`, true);
+            }
+        };
+
+        // 1-Tap Fast Transmit Macro Execution
+        window.sendQuickMacro = function(text) {
+            const input = document.getElementById("messageInput");
+            if (!input) return;
+            input.value = text;
+            sendMessage();
+            showToast(`Macro trasmessa: "${text}"`, true);
+        };
+
+        // Theme Switcher & Persistence
+        window.setAppTheme = function(t) {
+            if (t === "cyber") {
+                document.documentElement.removeAttribute("data-theme");
+            } else {
+                document.documentElement.setAttribute("data-theme", t);
+            }
+            localStorage.setItem("meshcore_theme", t);
+            document.querySelectorAll(".theme-card").forEach(el => {
+                el.classList.toggle("active", el.dataset.theme === t);
+            });
+        };
+        // Apply saved theme immediately
+        const savedTheme = localStorage.getItem("meshcore_theme") || "cyber";
+        setAppTheme(savedTheme);
+
+        // Data Export & Backup Functions
+        window.exportMessages = function(format) {
+            if (!messages || messages.length === 0) {
+                showToast("Nessun messaggio da esportare.", false);
+                return;
+            }
+            if (format === 'json') {
+                const blob = new Blob([JSON.stringify(messages, null, 2)], { type: "application/json" });
+                downloadBlob(blob, `meshcore_messages_${Date.now()}.json`);
+            } else {
+                let csv = "timestamp,channel,sender,source,hops,snr,content\n";
+                messages.forEach(m => {
+                    const row = [
+                        `"${m.timestamp || ''}"`,
+                        `"${m.channel || ''}"`,
+                        `"${(m.sender || '').replace(/"/g, '""')}"`,
+                        `"${m.source || ''}"`,
+                        m.hops !== null && m.hops !== undefined ? m.hops : '',
+                        m.snr !== null && m.snr !== undefined ? m.snr : '',
+                        `"${(m.content || '').replace(/"/g, '""')}"`
+                    ];
+                    csv += row.join(",") + "\n";
+                });
+                const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                downloadBlob(blob, `meshcore_messages_${Date.now()}.csv`);
+            }
+            showToast(`Esportazione messaggi (${format.toUpperCase()}) completata!`, true);
+        };
+
+        window.exportNodes = function(format) {
+            if (!heardNodes || heardNodes.length === 0) {
+                showToast("Nessun nodo ascoltato da esportare.", false);
+                return;
+            }
+            let csv = "node_name,last_seen,last_channel,last_hops,last_snr,lat,lon,packets_count,note\n";
+            heardNodes.forEach(n => {
+                const note = getNodeNote(n.node_name);
+                const row = [
+                    `"${(n.node_name || '').replace(/"/g, '""')}"`,
+                    `"${n.last_seen || ''}"`,
+                    `"${n.last_channel || ''}"`,
+                    n.last_hops !== null && n.last_hops !== undefined ? decodeHops(n.last_hops) : '',
+                    n.last_snr !== null && n.last_snr !== undefined ? n.last_snr : '',
+                    n.lat || '',
+                    n.lon || '',
+                    n.packets_count || 1,
+                    `"${note.replace(/"/g, '""')}"`
+                ];
+                csv += row.join(",") + "\n";
+            });
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+            downloadBlob(blob, `meshcore_nodes_${Date.now()}.csv`);
+            showToast("Esportazione tabella nodi completata!", true);
+        };
+
+        window.exportBackupConfig = function() {
+            const backup = {
+                version: "2.0",
+                export_date: new Date().toISOString(),
+                node_info: nodeInfo,
+                channels: channels,
+                node_notes: JSON.parse(localStorage.getItem("meshcore_node_notes") || "{}"),
+                theme: localStorage.getItem("meshcore_theme") || "cyber"
+            };
+            const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+            downloadBlob(blob, `meshcore_backup_config_${Date.now()}.json`);
+            showToast("Backup configurazione scaricato!", true);
+        };
+
+        window.importRestoreConfig = function(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.node_notes) {
+                        localStorage.setItem("meshcore_node_notes", JSON.stringify(data.node_notes));
+                    }
+                    if (data.theme) {
+                        setAppTheme(data.theme);
+                    }
+                    if (data.node_info) {
+                        Object.assign(nodeInfo, data.node_info);
+                        populateSettingsInputs();
+                        fetch("/api/settings/node", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(data.node_info)
+                        });
+                    }
+                    renderNodes();
+                    showToast("Configurazione e note ripristinate con successo!", true);
+                } catch(err) {
+                    showToast("File di configurazione JSON non valido.", false);
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        window.confirmClearContacts = function() {
+            if (confirm("Vuoi davvero svuotare la tabella dei nodi ascoltati?")) {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ action: "clear_contacts" }));
+                } else {
+                    fetch("/api/nodes/clear", { method: "POST" });
+                }
+                heardNodes = [];
+                renderNodes();
+                renderMapMarkers();
+                showToast("Tabella nodi svuotata.", true);
+            }
+        };
+
         // Show Scan Results Modal Dialog
         function showScanResultsModal(nodesList, isScanning = false) {
             const overlay = document.getElementById("scanModalOverlay");
@@ -2505,7 +3082,7 @@ def get_web_client_html() -> str:
                 let details = `<span>${timeStr}</span>`;
 
                 if (m.snr !== undefined && m.snr !== null) {
-                    details += `<span>• SNR: ${m.snr > 0 ? '+' : ''}${Number(m.snr).toFixed(1)}dB</span>`;
+                    details += `<span>• ${renderSMeterBars(m.snr)}SNR: ${m.snr > 0 ? '+' : ''}${Number(m.snr).toFixed(1)}dB</span>`;
                 }
                 if (m.hops !== undefined && m.hops !== null && !isOut) {
                     const hops = decodeHops(m.hops);
@@ -2577,6 +3154,7 @@ def get_web_client_html() -> str:
 
                 const icon = n.lat && n.lon ? "📍" : "📻";
                 const snrText = n.last_snr !== null && n.last_snr !== undefined ? `SNR: ${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)}dB` : "";
+                const sMeter = n.last_snr !== null && n.last_snr !== undefined ? renderSMeterBars(n.last_snr) : "";
                 const hops = decodeHops(n.last_hops);
                 const isDirect = (hops === 0);
                 const hopsBadge = isDirect
@@ -2584,17 +3162,39 @@ def get_web_client_html() -> str:
                     : `<span style="background:rgba(245, 158, 11, 0.15); color:#f59e0b; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.72rem;">🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}</span>`;
                 const timeText = n.last_seen ? n.last_seen.substring(11, 16) : "";
 
+                // Calculate bearing and distance from station (Buscate)
+                const myLat = (nodeInfo && nodeInfo.lat) ? Number(nodeInfo.lat) : 45.548;
+                const myLon = (nodeInfo && nodeInfo.lon) ? Number(nodeInfo.lon) : 8.816;
+                let bearingBadge = "";
+                if (n.lat && n.lon) {
+                    const dist = calculateDistanceKm(myLat, myLon, Number(n.lat), Number(n.lon));
+                    const bear = calcBearing(myLat, myLon, Number(n.lat), Number(n.lon));
+                    if (dist !== null && bear !== null) {
+                        bearingBadge = `<span class="bearing-badge" title="Distanza e Azimut polare dalla stazione Buscate">🧭 ${bear.dir} ${bear.deg}° • ${dist < 1 ? Math.round(dist * 1000) + 'm' : dist.toFixed(1) + 'km'}</span>`;
+                    }
+                }
+
+                // Custom Note / Alias from LocalStorage
+                const customNote = getNodeNote(n.node_name);
+                const noteHtml = customNote 
+                    ? `<span class="node-note-tag" onclick="promptEditNodeNote('${escapeJsString(n.node_name)}')">🏷️ ${escapeHtml(customNote)} ✏️</span>`
+                    : `<span class="node-note-tag" style="opacity:0.65;" onclick="promptEditNodeNote('${escapeJsString(n.node_name)}')">+ Nota</span>`;
+
                 card.innerHTML = `
                     <div class="node-avatar">${icon}</div>
                     <div class="node-info-col">
                         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                             <span class="node-name-text">${escapeHtml(n.node_name)}</span>
                             ${hopsBadge}
+                            ${bearingBadge}
                         </div>
                         <div class="node-sub-text">
                             <span>⏱️ ${timeText}</span>
-                            ${snrText ? `<span>• ${snrText}</span>` : ''}
+                            ${snrText ? `<span>• ${sMeter}${snrText}</span>` : ''}
                             <span>• ${n.packets_count || 1} pkt RX</span>
+                        </div>
+                        <div style="margin-top:2px;">
+                            ${noteHtml}
                         </div>
                     </div>
                     <div class="node-actions-col">
@@ -2638,17 +3238,26 @@ def get_web_client_html() -> str:
 
         // Populate Settings Inputs
         function populateSettingsInputs() {
-            if (nodeInfo.freq_mhz) document.getElementById("cfgFreq").value = nodeInfo.freq_mhz;
-            if (nodeInfo.bw_khz) document.getElementById("cfgBw").value = String(nodeInfo.bw_khz);
-            if (nodeInfo.sf) document.getElementById("cfgSf").value = String(nodeInfo.sf);
-            if (nodeInfo.cr) document.getElementById("cfgCr").value = String(nodeInfo.cr);
-            if (nodeInfo.tx_power) document.getElementById("cfgTxPower").value = String(nodeInfo.tx_power);
-            if (nodeInfo.name) document.getElementById("cfgNodeName").value = nodeInfo.name;
-            if (nodeInfo.lat) document.getElementById("cfgLat").value = nodeInfo.lat;
-            if (nodeInfo.lon) document.getElementById("cfgLon").value = nodeInfo.lon;
+            if (nodeInfo.freq_mhz && document.getElementById("cfgFreq")) document.getElementById("cfgFreq").value = nodeInfo.freq_mhz;
+            if (nodeInfo.bw_khz && document.getElementById("cfgBw")) document.getElementById("cfgBw").value = String(nodeInfo.bw_khz);
+            if (nodeInfo.sf && document.getElementById("cfgSf")) document.getElementById("cfgSf").value = String(nodeInfo.sf);
+            if (nodeInfo.cr && document.getElementById("cfgCr")) document.getElementById("cfgCr").value = String(nodeInfo.cr);
+            if (nodeInfo.tx_power && document.getElementById("cfgTxPower")) document.getElementById("cfgTxPower").value = String(nodeInfo.tx_power);
+            if (nodeInfo.preamble_len && document.getElementById("cfgPreamble")) document.getElementById("cfgPreamble").value = String(nodeInfo.preamble_len);
+            if (nodeInfo.sync_word && document.getElementById("cfgSyncWord")) document.getElementById("cfgSyncWord").value = String(nodeInfo.sync_word);
+            if (nodeInfo.name && document.getElementById("cfgNodeName")) document.getElementById("cfgNodeName").value = nodeInfo.name;
+            if (nodeInfo.lat && document.getElementById("cfgLat")) document.getElementById("cfgLat").value = nodeInfo.lat;
+            if (nodeInfo.lon && document.getElementById("cfgLon")) document.getElementById("cfgLon").value = nodeInfo.lon;
+            if (nodeInfo.altitude_m && document.getElementById("cfgAltitude")) document.getElementById("cfgAltitude").value = nodeInfo.altitude_m;
             if (document.getElementById("cfgScope")) document.getElementById("cfgScope").value = nodeInfo.regional_scope || "it";
-            if (nodeInfo.model) document.getElementById("cfgDevModel").textContent = nodeInfo.model;
-            if (nodeInfo.firmware) document.getElementById("cfgDevFw").textContent = nodeInfo.firmware;
+            if (nodeInfo.node_role && document.getElementById("cfgNodeRole")) document.getElementById("cfgNodeRole").value = nodeInfo.node_role;
+            if (nodeInfo.beacon_interval_min !== undefined && document.getElementById("cfgBeaconInterval")) document.getElementById("cfgBeaconInterval").value = String(nodeInfo.beacon_interval_min);
+            if (nodeInfo.beacon_flood !== undefined && document.getElementById("cfgBeaconFlood")) document.getElementById("cfgBeaconFlood").value = String(nodeInfo.beacon_flood);
+            if (nodeInfo.gps_share_mode && document.getElementById("cfgGpsShareMode")) document.getElementById("cfgGpsShareMode").value = nodeInfo.gps_share_mode;
+            if (nodeInfo.gps_privacy_blur !== undefined && document.getElementById("cfgGpsPrivacyBlur")) document.getElementById("cfgGpsPrivacyBlur").value = String(nodeInfo.gps_privacy_blur);
+            if (nodeInfo.max_hops && document.getElementById("cfgMaxHops")) document.getElementById("cfgMaxHops").value = String(nodeInfo.max_hops);
+            if (nodeInfo.model && document.getElementById("cfgDevModel")) document.getElementById("cfgDevModel").textContent = nodeInfo.model;
+            if (nodeInfo.firmware && document.getElementById("cfgDevFw")) document.getElementById("cfgDevFw").textContent = nodeInfo.firmware;
         }
 
         // WebSocket Connection
@@ -2659,6 +3268,7 @@ def get_web_client_html() -> str:
 
             socket.onopen = () => {
                 console.log("WebSocket client connected");
+                sendWsPing();
             };
 
             socket.onmessage = (event) => {
@@ -2673,6 +3283,8 @@ def get_web_client_html() -> str:
             socket.onclose = () => {
                 console.warn("WebSocket client disconnected, reconnecting in 3s...");
                 isHeltecConnected = false;
+                const rttEl = document.getElementById("pingRttDisplay");
+                if (rttEl) rttEl.textContent = "⚡ -- ms";
                 updateHeader();
                 setTimeout(connectWebSocket, 3000);
             };
@@ -2683,7 +3295,29 @@ def get_web_client_html() -> str:
         }
 
         function handleSocketMessage(data) {
-            if (data.type === "init") {
+            if (data.type === "pong") {
+                if (pingSentTime > 0) {
+                    const rtt = Math.round(performance.now() - pingSentTime);
+                    const rttEl = document.getElementById("pingRttDisplay");
+                    if (rttEl) {
+                        rttEl.textContent = `⚡ ${rtt}ms`;
+                        if (rtt < 120) {
+                            rttEl.style.color = "#34d399";
+                            rttEl.style.borderColor = "rgba(16, 185, 129, 0.4)";
+                        } else if (rtt < 350) {
+                            rttEl.style.color = "#f59e0b";
+                            rttEl.style.borderColor = "rgba(245, 158, 11, 0.4)";
+                        } else {
+                            rttEl.style.color = "#f87171";
+                            rttEl.style.borderColor = "rgba(239, 68, 68, 0.4)";
+                        }
+                    }
+                }
+            } else if (data.type === "nodes_list") {
+                heardNodes = data.nodes || [];
+                renderNodes();
+                renderMapMarkers();
+            } else if (data.type === "init") {
                 isHeltecConnected = data.heltec_connected;
                 if (data.channels) channels = data.channels;
                 if (data.node_info) nodeInfo = Object.assign(nodeInfo, data.node_info);
@@ -2920,6 +3554,8 @@ def get_web_client_html() -> str:
             const sf = parseInt(document.getElementById("cfgSf").value);
             const cr = parseInt(document.getElementById("cfgCr").value);
             const tx = parseInt(document.getElementById("cfgTxPower").value);
+            const preamble = parseInt(document.getElementById("cfgPreamble").value) || 8;
+            const syncWord = document.getElementById("cfgSyncWord").value || "0x2B";
 
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({
@@ -2933,35 +3569,65 @@ def get_web_client_html() -> str:
                     action: "set_radio_tx_power",
                     tx_power: tx
                 }));
-            } else {
-                fetch("/api/settings/radio", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ freq_mhz: freq, bw_khz: bw, sf: sf, cr: cr, tx_power: tx })
-                });
             }
-            showToast("Parametri inviati alla scheda Heltec...", true);
+            fetch("/api/settings/radio", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ freq_mhz: freq, bw_khz: bw, sf: sf, cr: cr, tx_power: tx, preamble_len: preamble, sync_word: syncWord })
+            });
+            showToast("Parametri Radio applicati con successo!", true);
         });
 
         document.getElementById("saveNodeBtn").addEventListener("click", () => {
             const name = document.getElementById("cfgNodeName").value.trim();
             const lat = parseFloat(document.getElementById("cfgLat").value) || null;
             const lon = parseFloat(document.getElementById("cfgLon").value) || null;
+            const altitude = parseInt(document.getElementById("cfgAltitude").value) || 195;
             const scope = document.getElementById("cfgScope") ? document.getElementById("cfgScope").value.trim().toLowerCase() : "";
+            const role = document.getElementById("cfgNodeRole").value || "client";
+            const bInterval = parseInt(document.getElementById("cfgBeaconInterval").value) || 0;
+            const bFlood = parseInt(document.getElementById("cfgBeaconFlood").value) || 1;
 
             if (socket && socket.readyState === WebSocket.OPEN) {
                 if (name) socket.send(JSON.stringify({ action: "set_advert_name", name: name }));
                 if (lat && lon) socket.send(JSON.stringify({ action: "set_advert_latlon", lat: lat, lon: lon }));
                 if (scope) socket.send(JSON.stringify({ action: "set_scope", scope: scope }));
-            } else {
+            }
+            fetch("/api/settings/node", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    name: name, lat: lat, lon: lon, altitude_m: altitude, scope: scope,
+                    node_role: role, beacon_interval_min: bInterval, beacon_flood: bFlood
+                })
+            });
+            showToast("Identità, Ruolo e Beacon salvati!", true);
+        });
+
+        if (document.getElementById("saveTelemetryBtn")) {
+            document.getElementById("saveTelemetryBtn").addEventListener("click", () => {
+                const mode = document.getElementById("cfgGpsShareMode").value;
+                const blur = parseInt(document.getElementById("cfgGpsPrivacyBlur").value) || 0;
                 fetch("/api/settings/node", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name: name, lat: lat, lon: lon, scope: scope })
+                    body: JSON.stringify({ gps_share_mode: mode, gps_privacy_blur: blur })
                 });
-            }
-            showToast("Parametri inviati alla scheda...", true);
-        });
+                showToast("Preferenze telemetria salvate!", true);
+            });
+        }
+
+        if (document.getElementById("saveRoutingBtn")) {
+            document.getElementById("saveRoutingBtn").addEventListener("click", () => {
+                const maxHops = parseInt(document.getElementById("cfgMaxHops").value) || 3;
+                fetch("/api/settings/node", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ max_hops: maxHops })
+                });
+                showToast("Politica routing salvata!", true);
+            });
+        }
 
         document.getElementById("sendAdvertBtn").addEventListener("click", () => {
             if (socket && socket.readyState === WebSocket.OPEN) {
@@ -3165,12 +3831,15 @@ def get_web_client_html() -> str:
                 .replace(/'/g, "&#039;");
         }
 
-        // Keepalive
-        setInterval(() => {
+        // Live Latency / Keepalive
+        let pingSentTime = 0;
+        function sendWsPing() {
             if (socket && socket.readyState === WebSocket.OPEN) {
+                pingSentTime = performance.now();
                 socket.send(JSON.stringify({ action: "ping" }));
             }
-        }, 25000);
+        }
+        setInterval(sendWsPing, 4000);
 
         // Init
         renderChannelsBar();
