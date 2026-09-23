@@ -2625,7 +2625,7 @@ def get_web_client_html() -> str:
                 const blob = new Blob([JSON.stringify(messages, null, 2)], { type: "application/json" });
                 downloadBlob(blob, `meshcore_messages_${Date.now()}.json`);
             } else {
-                let csv = "timestamp,channel,sender,source,hops,snr,content\n";
+                let csv = "timestamp,channel,sender,source,hops,snr,content\\n";
                 messages.forEach(m => {
                     const row = [
                         `"${m.timestamp || ''}"`,
@@ -2636,7 +2636,7 @@ def get_web_client_html() -> str:
                         m.snr !== null && m.snr !== undefined ? m.snr : '',
                         `"${(m.content || '').replace(/"/g, '""')}"`
                     ];
-                    csv += row.join(",") + "\n";
+                    csv += row.join(",") + "\\n";
                 });
                 const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
                 downloadBlob(blob, `meshcore_messages_${Date.now()}.csv`);
@@ -2649,7 +2649,7 @@ def get_web_client_html() -> str:
                 showToast("Nessun nodo ascoltato da esportare.", false);
                 return;
             }
-            let csv = "node_name,last_seen,last_channel,last_hops,last_snr,lat,lon,packets_count,note\n";
+            let csv = "node_name,last_seen,last_channel,last_hops,last_snr,lat,lon,packets_count,note\\n";
             heardNodes.forEach(n => {
                 const note = getNodeNote(n.node_name);
                 const row = [
@@ -2663,7 +2663,7 @@ def get_web_client_html() -> str:
                     n.packets_count || 1,
                     `"${note.replace(/"/g, '""')}"`
                 ];
-                csv += row.join(",") + "\n";
+                csv += row.join(",") + "\\n";
             });
             const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
             downloadBlob(blob, `meshcore_nodes_${Date.now()}.csv`);
