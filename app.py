@@ -144,6 +144,10 @@ def init_db():
         cursor.execute("ALTER TABLE messages ADD COLUMN ack_nodes_count INTEGER DEFAULT 0")
     except Exception:
         pass
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN ack_nodes TEXT DEFAULT ''")
+    except Exception:
+        pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
             chat_id TEXT PRIMARY KEY,
@@ -478,18 +482,19 @@ def get_topic_binding(chat_id: str, lora_channel_idx: int) -> Optional[int]:
         print("DB get_topic_binding error:", e)
         return None
 
-def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None, timestamp: Optional[str] = None, ack_nodes_count: Optional[int] = None) -> int:
+def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None, timestamp: Optional[str] = None, ack_nodes_count: Optional[int] = None, ack_nodes: Optional[str] = None) -> int:
     msg_id = 0
     dec_hops = decode_meshcore_hops(hops) if hops is not None else None
     ts = timestamp or get_rome_now_str()
     if ack_nodes_count is None:
         ack_nodes_count = 1 if ack_status == "confirmed" and source in ("Web Client", "Web API", "Telegram", "Echo Bot") else 0
+    ack_nodes_str = ack_nodes or ""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO messages (timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms, ack_nodes_count)
+            "INSERT INTO messages (timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count, ack_nodes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms, ack_nodes_count, ack_nodes_str)
         )
         msg_id = cursor.lastrowid
         conn.commit()
@@ -498,7 +503,7 @@ def save_message(source: str, sender: str, channel: str, content: str, snr: Opti
         print("DB save_message error:", e)
     return msg_id
 
-def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None, ack_nodes_count: Optional[int] = None):
+def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None, ack_nodes_count: Optional[int] = None, ack_nodes: Optional[str] = None):
     dec_hops = decode_meshcore_hops(hops) if hops is not None else None
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -514,6 +519,9 @@ def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = Non
         if ack_nodes_count is not None:
             fields.append("ack_nodes_count = ?")
             params.append(ack_nodes_count)
+        if ack_nodes is not None:
+            fields.append("ack_nodes = ?")
+            params.append(ack_nodes)
         params.append(msg_id)
         query = f"UPDATE messages SET {', '.join(fields)} WHERE id = ?"
         cursor.execute(query, tuple(params))
@@ -529,12 +537,12 @@ def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List
         cursor = conn.cursor()
         if channel:
             cursor.execute(
-                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count, ack_nodes FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
                 (channel, limit)
             )
         else:
             cursor.execute(
-                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count FROM messages ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count, ack_nodes FROM messages ORDER BY id DESC LIMIT ?",
                 (limit,)
             )
         rows = cursor.fetchall()
@@ -548,11 +556,126 @@ def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List
                 d["ack_nodes_count"] = 1
             elif not d.get("ack_nodes_count"):
                 d["ack_nodes_count"] = 0
+            raw_nodes = d.get("ack_nodes")
+            if raw_nodes:
+                try:
+                    d["ack_nodes"] = json.loads(raw_nodes)
+                except Exception:
+                    d["ack_nodes"] = [raw_nodes]
+            else:
+                d["ack_nodes"] = []
             res.append(d)
         return res
     except Exception as e:
         print("DB fetch error:", e)
         return []
+
+def check_and_process_mention_reply(sender_node: str, channel_name: str, content_text: str, snr: Optional[float], hops: Optional[int]) -> Optional[dict]:
+    """Se un messaggio LoRa in arrivo risponde o menziona la nostra stazione, trova il nostro ultimo messaggio inviato e lo conferma."""
+    my_name = node_info.get("name", "Buscate 🇮🇹").strip()
+    clean_name = re.sub(r'[^\w\s-]', '', my_name).strip().lower()
+    low = content_text.lower()
+    
+    # Riconosce formati di risposta o menzione a Buscate o Web-Operatore
+    is_reply = False
+    if f"@[{my_name.lower()}]" in low or f"@{my_name.lower()}" in low:
+        is_reply = True
+    elif clean_name and (f"@[{clean_name}]" in low or f"@{clean_name}" in low or clean_name in low):
+        is_reply = True
+    elif "@[web-operatore]" in low or "@web-operatore" in low:
+        is_reply = True
+
+    if not is_reply:
+        return None
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        # Cerca l'ultimo messaggio inviato da noi su questo canale
+        cur.execute(
+            "SELECT id, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND channel = ? ORDER BY id DESC LIMIT 1",
+            (channel_name,)
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "SELECT id, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+
+        if row:
+            msg_id = row["id"]
+            raw_nodes = row["ack_nodes"] or ""
+            nodes = []
+            if raw_nodes:
+                try:
+                    nodes = json.loads(raw_nodes)
+                except Exception:
+                    nodes = [raw_nodes]
+            if sender_node and sender_node not in nodes:
+                nodes.append(sender_node)
+            new_count = max(1, len(nodes))
+            dec_hops = decode_meshcore_hops(hops) if hops is not None else row["hops"]
+            nodes_json = json.dumps(nodes)
+
+            cur.execute(
+                "UPDATE messages SET ack_status = 'confirmed', ack_nodes_count = ?, ack_nodes = ?, hops = COALESCE(?, hops) WHERE id = ?",
+                (new_count, nodes_json, dec_hops, msg_id)
+            )
+            conn.commit()
+            conn.close()
+            return {
+                "msg_id": msg_id,
+                "ack_nodes_count": new_count,
+                "ack_nodes": nodes,
+                "node_name": sender_node,
+                "hops": dec_hops,
+                "channel": channel_name
+            }
+        conn.close()
+    except Exception as e:
+        print("Error in check_and_process_mention_reply:", e)
+    return None
+
+def retro_reconcile_acks_in_db():
+    """Analizza all'avvio i messaggi esistenti nel DB per associare risposte e menzioni ai messaggi inviati."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT id, source, sender, channel, content, hops FROM messages ORDER BY id ASC")
+        rows = cur.fetchall()
+        for r in rows:
+            if r["source"] == "LoRa Mesh" and r["content"]:
+                low = r["content"].lower()
+                if "buscate" in low or "@[web-operatore]" in low:
+                    sender = r["sender"]
+                    ch = r["channel"]
+                    msg_id = r["id"]
+                    hops = r["hops"]
+                    cur.execute(
+                        "SELECT id, ack_nodes FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND (channel = ? OR channel IS NULL OR ? IS NULL OR ? = '') AND id < ? ORDER BY id DESC LIMIT 1",
+                        (ch, ch, ch, msg_id)
+                    )
+                    prev = cur.fetchone()
+                    if prev:
+                        nodes = []
+                        if prev["ack_nodes"]:
+                            try:
+                                nodes = json.loads(prev["ack_nodes"])
+                            except Exception:
+                                nodes = [prev["ack_nodes"]]
+                        if sender and sender not in nodes:
+                            nodes.append(sender)
+                        cur.execute(
+                            "UPDATE messages SET ack_status = 'confirmed', ack_nodes_count = ?, ack_nodes = ?, hops = COALESCE(?, hops) WHERE id = ?",
+                            (len(nodes), json.dumps(nodes), hops, prev["id"])
+                        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("Error in retro_reconcile_acks_in_db:", e)
 
 def extract_gps_coords(text: str) -> Tuple[Optional[float], Optional[float]]:
     pattern = r"(-?\d{1,2}\.\d{3,7})[\s,;|/]+(-?\d{1,3}\.\d{3,7})"
@@ -996,6 +1119,7 @@ async def periodic_beacon_loop():
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    retro_reconcile_acks_in_db()
     node_info["regional_scope"] = get_node_setting("regional_scope", "it")
     node_info["name"] = get_node_setting("name", node_info.get("name", "Buscate"))
     try:
@@ -1630,7 +1754,7 @@ async def api_manifest():
 @app.get("/sw.js")
 async def api_service_worker():
     sw_code = """
-const CACHE_NAME = 'meshcore-cache-v8';
+const CACHE_NAME = 'meshcore-cache-v9';
 self.addEventListener('install', (e) => {
     self.skipWaiting();
 });
@@ -1756,6 +1880,31 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     record_heard_node(sender_name, snr, hops, ch_name, lat, lon)
                     save_message("LoRa Mesh", sender_name, ch_name, content_text, snr=snr, hops=hops)
 
+                    # Check if incoming message mentions or replies to our station/previous message
+                    reply_ack = check_and_process_mention_reply(sender_name, ch_name, content_text, snr, hops)
+                    if reply_ack:
+                        await broadcast_to_browsers({
+                            "type": "message_ack",
+                            "msg_id": reply_ack["msg_id"],
+                            "status": "confirmed",
+                            "ack_nodes_count": reply_ack["ack_nodes_count"],
+                            "ack_nodes": reply_ack["ack_nodes"],
+                            "node_name": reply_ack["node_name"],
+                            "hops": reply_ack["hops"],
+                            "channel": ch_name
+                        })
+                        node_word = "1 nodo" if reply_ack["ack_nodes_count"] == 1 else f"{reply_ack['ack_nodes_count']} nodi"
+                        nodes_str = ", ".join(reply_ack["ack_nodes"])
+                        snr_txt = f" (SNR: {snr:+.1f}dB)" if snr is not None else ""
+                        hops_txt = f" a {hops} salti" if hops is not None else ""
+                        await broadcast_telegram(
+                            f"🟢 <b>✓✓ RICEVUTO DA {node_word.upper()}!</b>\n"
+                            f"👤 <b>{sender_name}</b> ha risposto su <b>[{ch_idx}: {ch_name}]</b> confermando la ricezione del tuo messaggio!\n"
+                            f"• 👥 <b>Nodi:</b> {nodes_str}\n"
+                            f"• 📶 <b>Segnale:</b>{hops_txt}{snr_txt}",
+                            lora_channel_idx=ch_idx
+                        )
+
                     # Check Radar RF Proximity Alert
                     if hops == 0 and check_and_alert_direct_node(sender_name, snr, hops):
                         snr_txt = f"{snr:+.1f} dB" if snr is not None else "N/A"
@@ -1821,6 +1970,30 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     lat, lon = extract_gps_coords(content_text)
                     record_heard_node(sender_name, None, hops, ch_name, lat, lon)
                     save_message("LoRa Mesh", sender_name, ch_name, content_text, hops=hops)
+
+                    # Check if incoming message mentions or replies to our station/previous message
+                    reply_ack = check_and_process_mention_reply(sender_name, ch_name, content_text, None, hops)
+                    if reply_ack:
+                        await broadcast_to_browsers({
+                            "type": "message_ack",
+                            "msg_id": reply_ack["msg_id"],
+                            "status": "confirmed",
+                            "ack_nodes_count": reply_ack["ack_nodes_count"],
+                            "ack_nodes": reply_ack["ack_nodes"],
+                            "node_name": reply_ack["node_name"],
+                            "hops": reply_ack["hops"],
+                            "channel": ch_name
+                        })
+                        node_word = "1 nodo" if reply_ack["ack_nodes_count"] == 1 else f"{reply_ack['ack_nodes_count']} nodi"
+                        nodes_str = ", ".join(reply_ack["ack_nodes"])
+                        hops_txt = f" a {hops} salti" if hops is not None else ""
+                        await broadcast_telegram(
+                            f"🟢 <b>✓✓ RICEVUTO DA {node_word.upper()}!</b>\n"
+                            f"👤 <b>{sender_name}</b> ha risposto su <b>[{ch_idx}: {ch_name}]</b> confermando la ricezione del tuo messaggio!\n"
+                            f"• 👥 <b>Nodi:</b> {nodes_str}\n"
+                            f"• 📶 <b>Segnale:</b>{hops_txt}",
+                            lora_channel_idx=ch_idx
+                        )
 
                     # Check Radar RF Proximity Alert
                     if hops == 0 and check_and_alert_direct_node(sender_name, None, hops):

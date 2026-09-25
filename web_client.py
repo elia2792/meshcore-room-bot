@@ -2025,12 +2025,59 @@ def get_web_client_html() -> str:
                     String(d.getMinutes()).padStart(2, '0') + ":" +
                     String(d.getSeconds()).padStart(2, '0');
             }
-            if (m.ack_status === "confirmed" && (!m.ack_nodes_count || m.ack_nodes_count < 1)) {
+            if (typeof m.ack_nodes === "string") {
+                try { m.ack_nodes = JSON.parse(m.ack_nodes); } catch(e) { m.ack_nodes = m.ack_nodes ? [m.ack_nodes] : []; }
+            }
+            if (!Array.isArray(m.ack_nodes)) {
+                m.ack_nodes = [];
+            }
+            if (m.ack_nodes.length > 0) {
+                m.ack_nodes_count = m.ack_nodes.length;
+                m.ack_status = "confirmed";
+            } else if (m.ack_status === "confirmed" && (!m.ack_nodes_count || m.ack_nodes_count < 1)) {
                 m.ack_nodes_count = 1;
             } else if (m.ack_nodes_count === undefined || m.ack_nodes_count === null) {
                 m.ack_nodes_count = 0;
             }
             return m;
+        }
+
+        function reconcileMessageAcks() {
+            const myName = (nodeInfo && nodeInfo.name) ? nodeInfo.name.toLowerCase() : "buscate";
+            const cleanName = myName.replace(/[^\w\s-]/g, '').trim();
+
+            for (let i = 0; i < messages.length; i++) {
+                const msg = messages[i];
+                if (msg.source === "LoRa Mesh" && msg.content) {
+                    const low = msg.content.toLowerCase();
+                    const quoteLow = (msg.reply_to_sender || "").toLowerCase();
+                    const isReply = low.includes(`@[${myName}]`) || low.includes(`@{${myName}}`) ||
+                                    low.includes(`@[${cleanName}]`) || low.includes(`@${cleanName}`) ||
+                                    low.includes("@[buscate") || low.includes("@buscate") ||
+                                    low.includes("buscate") || low.includes("@[web-operatore]") ||
+                                    quoteLow.includes("buscate") || quoteLow.includes(cleanName);
+                    if (isReply) {
+                        const senderNode = msg.sender || "Nodo Radio";
+                        for (let j = i - 1; j >= 0; j--) {
+                            const prev = messages[j];
+                            if (prev.source === "Web Client" || prev.source === "Telegram" || prev.source === "Web API") {
+                                if (prev.channel === msg.channel || !prev.channel) {
+                                    prev.ack_status = "confirmed";
+                                    if (!Array.isArray(prev.ack_nodes)) prev.ack_nodes = [];
+                                    if (!prev.ack_nodes.includes(senderNode)) {
+                                        prev.ack_nodes.push(senderNode);
+                                    }
+                                    prev.ack_nodes_count = Math.max(prev.ack_nodes_count || 0, prev.ack_nodes.length);
+                                    if (msg.hops !== undefined && msg.hops !== null && (prev.hops === undefined || prev.hops === null)) {
+                                        prev.hops = msg.hops;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         function formatMsgDisplayTime(m) {
@@ -3154,18 +3201,26 @@ def get_web_client_html() -> str:
                             const m = normalizeMessageObject(item);
                             if (!m) return;
                             const key = getMsgKey(m);
-                            if (!existingKeys.has(key)) {
+                            const existing = messages.find(ex => getMsgKey(ex) === key || (m.id && ex.id === m.id));
+                            if (existing) {
+                                if (m.ack_status && m.ack_status !== "pending") existing.ack_status = m.ack_status;
+                                if (m.ack_nodes && Array.isArray(m.ack_nodes) && m.ack_nodes.length > 0) {
+                                    if (!Array.isArray(existing.ack_nodes)) existing.ack_nodes = [];
+                                    m.ack_nodes.forEach(n => {
+                                        if (!existing.ack_nodes.includes(n)) existing.ack_nodes.push(n);
+                                    });
+                                    existing.ack_nodes_count = Math.max(existing.ack_nodes_count || 0, existing.ack_nodes.length);
+                                }
+                            } else if (!existingKeys.has(key)) {
                                 if (m.channel_idx === undefined || m.channel_idx === null) m.channel_idx = channelIdx;
                                 messages.push(m);
                                 existingKeys.add(key);
                                 added++;
                             }
                         });
-                        if (added > 0) {
-                            messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
-                            saveMessagesToStorage();
-                            renderMessages();
-                        }
+                        messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+                        saveMessagesToStorage();
+                        renderMessages();
                     }
                 }
             } catch(e) {
@@ -3221,6 +3276,7 @@ def get_web_client_html() -> str:
 
         // Render Messages List
         function renderMessages() {
+            reconcileMessageAcks();
             const container = document.getElementById("chatMessagesScroll");
             const chTitle = activeChannelIdx === -1 ? "🌐 Tutti i Canali" : `Canale [${activeChannelIdx}] ${channels[activeChannelIdx] || ""}`;
             container.innerHTML = `<div class="chat-date-separator"><span>Oggi • ${chTitle}</span></div>`;
@@ -3345,7 +3401,12 @@ def get_web_client_html() -> str:
 
                     if (nodeCount > 0 || status === "confirmed") {
                         const count = Math.max(1, nodeCount);
-                        const nodeLabel = count === 1 ? "1 nodo" : `${count} nodi`;
+                        let nodeLabel = count === 1 ? "1 nodo" : `${count} nodi`;
+                        if (m.ack_nodes && Array.isArray(m.ack_nodes) && m.ack_nodes.length > 0) {
+                            nodeLabel = m.ack_nodes.length === 1
+                                ? `1 nodo (${escapeHtml(m.ack_nodes[0])})`
+                                : `${m.ack_nodes.length} nodi (${m.ack_nodes.map(escapeHtml).join(', ')})`;
+                        }
                         const rtt = m.rtt_ms ? ` • ${m.rtt_ms}ms` : "";
                         let hopInfo = "";
                         if (m.hops !== undefined && m.hops !== null) {
@@ -3577,7 +3638,17 @@ def get_web_client_html() -> str:
                         const m = normalizeMessageObject(item);
                         if (!m) return;
                         const key = getMsgKey(m);
-                        if (!existingKeys.has(key)) {
+                        const existing = messages.find(ex => getMsgKey(ex) === key || (m.id && ex.id === m.id));
+                        if (existing) {
+                            if (m.ack_status && m.ack_status !== "pending") existing.ack_status = m.ack_status;
+                            if (m.ack_nodes && Array.isArray(m.ack_nodes) && m.ack_nodes.length > 0) {
+                                if (!Array.isArray(existing.ack_nodes)) existing.ack_nodes = [];
+                                m.ack_nodes.forEach(n => {
+                                    if (!existing.ack_nodes.includes(n)) existing.ack_nodes.push(n);
+                                });
+                                existing.ack_nodes_count = Math.max(existing.ack_nodes_count || 0, existing.ack_nodes.length);
+                            }
+                        } else if (!existingKeys.has(key)) {
                             messages.push(m);
                             existingKeys.add(key);
                             added++;
@@ -3585,8 +3656,8 @@ def get_web_client_html() -> str:
                     });
                     if (added > 0) {
                         messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
-                        saveMessagesToStorage();
                     }
+                    saveMessagesToStorage();
                 }
                 if (data.recent_nodes) heardNodes = data.recent_nodes;
                 updateHeader();
@@ -3672,9 +3743,17 @@ def get_web_client_html() -> str:
                 }
                 if (target) {
                     target.ack_status = "confirmed";
-                    const currentCount = target.ack_nodes_count || 0;
-                    target.ack_nodes_count = data.ack_nodes_count ? Math.max(currentCount + 1, data.ack_nodes_count) : (currentCount + 1);
-                    target.rtt_ms = data.round_trip_ms;
+                    if (!Array.isArray(target.ack_nodes)) target.ack_nodes = [];
+                    if (data.ack_nodes && Array.isArray(data.ack_nodes)) {
+                        data.ack_nodes.forEach(n => {
+                            if (!target.ack_nodes.includes(n)) target.ack_nodes.push(n);
+                        });
+                    } else if (data.node_name && !target.ack_nodes.includes(data.node_name)) {
+                        target.ack_nodes.push(data.node_name);
+                    }
+                    const currentCount = target.ack_nodes.length || target.ack_nodes_count || 0;
+                    target.ack_nodes_count = data.ack_nodes_count ? Math.max(currentCount, data.ack_nodes_count) : Math.max(currentCount, 1);
+                    target.rtt_ms = data.round_trip_ms || target.rtt_ms;
                     if (data.hops !== undefined && data.hops !== null) {
                         target.hops = data.hops;
                     }
@@ -3683,7 +3762,12 @@ def get_web_client_html() -> str:
                 renderMessages();
                 playChime("ack");
                 const count = target ? (target.ack_nodes_count || 1) : 1;
-                const nodeLabel = count === 1 ? "1 nodo" : `${count} nodi`;
+                let nodeLabel = count === 1 ? "1 nodo" : `${count} nodi`;
+                if (target && target.ack_nodes && target.ack_nodes.length > 0) {
+                    nodeLabel = target.ack_nodes.length === 1 ? `1 nodo (${target.ack_nodes[0]})` : `${target.ack_nodes.length} nodi (${target.ack_nodes.join(', ')})`;
+                } else if (data.node_name) {
+                    nodeLabel = `1 nodo (${data.node_name})`;
+                }
                 const hops = (data.hops !== undefined && data.hops !== null) ? decodeHops(data.hops) : null;
                 const hopsStr = data.hops_str ? ` (${data.hops_str})` : (hops !== null ? (hops === 0 ? " (🎯 Diretto RF)" : ` (🔀 ${hops} salti)`) : "");
                 const rttStr = data.round_trip_ms ? ` (${data.round_trip_ms} ms)` : "";
