@@ -557,9 +557,15 @@ def get_web_client_html() -> str:
             border-radius: 6px;
             font-weight: 600;
             letter-spacing: 0.2px;
+            transition: all 0.25s ease-in-out;
         }
 
-        .ack-indicator.pending,
+        .ack-indicator.pending {
+            color: #cbd5e1;
+            background: rgba(203, 213, 225, 0.1);
+            border: 1px solid rgba(203, 213, 225, 0.2);
+        }
+
         .ack-indicator.sent {
             color: #94a3b8;
             background: rgba(148, 163, 184, 0.12);
@@ -569,7 +575,14 @@ def get_web_client_html() -> str:
         .ack-indicator.air {
             color: #38bdf8;
             background: rgba(56, 189, 248, 0.15);
-            border: 1px solid rgba(56, 189, 248, 0.3);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+            animation: pulseAir 1.2s ease-out;
+        }
+
+        @keyframes pulseAir {
+            0% { transform: scale(1.12); box-shadow: 0 0 14px rgba(56, 189, 248, 0.6); }
+            100% { transform: scale(1.0); box-shadow: 0 0 8px rgba(56, 189, 248, 0.25); }
         }
 
         .ack-indicator.confirmed {
@@ -2113,17 +2126,23 @@ def get_web_client_html() -> str:
                 if (msg.source === "LoRa Mesh" && msg.content) {
                     const low = msg.content.toLowerCase();
                     const quoteLow = (msg.reply_to_sender || "").toLowerCase();
-                    const isReply = low.includes(`@[${myName}]`) || low.includes(`@{${myName}}`) ||
-                                    low.includes(`@[${cleanName}]`) || low.includes(`@${cleanName}`) ||
-                                    low.includes("@[buscate") || low.includes("@buscate") ||
-                                    low.includes("buscate") || low.includes("@[web-operatore]") ||
-                                    quoteLow.includes("buscate") || quoteLow.includes(cleanName);
-                    if (isReply) {
-                        const senderNode = msg.sender || "Nodo Radio";
-                        for (let j = i - 1; j >= 0; j--) {
-                            const prev = messages[j];
-                            if (prev.source === "Web Client" || prev.source === "Telegram" || prev.source === "Web API") {
-                                if (prev.channel === msg.channel || !prev.channel) {
+
+                    for (let j = i - 1; j >= 0; j--) {
+                        const prev = messages[j];
+                        if (prev.source === "Web Client" || prev.source === "Telegram" || prev.source === "Web API") {
+                            if (prev.channel === msg.channel || !prev.channel) {
+                                const prevSender = (prev.sender || "").trim().toLowerCase();
+                                const cleanSender = prevSender.replace(/[^\w\s-]/g, '').trim();
+
+                                const isReply = low.includes(`@[${myName}]`) || low.includes(`@{${myName}}`) ||
+                                                low.includes(`@[${cleanName}]`) || low.includes(`@${cleanName}`) ||
+                                                low.includes("@[buscate") || low.includes("@buscate") ||
+                                                low.includes("buscate") || low.includes("@[web-operatore]") ||
+                                                quoteLow.includes("buscate") || quoteLow.includes(cleanName) ||
+                                                (cleanSender.length >= 3 && (low.includes(`@[${cleanSender}]`) || low.includes(`@${cleanSender}`) || quoteLow.includes(cleanSender)));
+
+                                if (isReply) {
+                                    const senderNode = msg.sender || "Nodo Radio";
                                     prev.ack_status = "confirmed";
                                     if (!Array.isArray(prev.ack_nodes)) prev.ack_nodes = [];
                                     if (!prev.ack_nodes.includes(senderNode)) {
@@ -3527,7 +3546,13 @@ def get_web_client_html() -> str:
                             const hops = decodeHops(m.hops);
                             hopInfo = hops === 0 ? " • 🎯 Diretto RF" : ` • 🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                         }
-                        details += `<span class="ack-indicator confirmed">✓✓ Ricevuto da ${nodeLabel}${hopInfo}${rtt}</span>`;
+                        details += `<span class="ack-indicator confirmed" title="Ricevuto e confermato dalla mesh">✓✓ Ricevuto da ${nodeLabel}${hopInfo}${rtt}</span>`;
+                    } else if (status === "transmitted" || status === "air") {
+                        details += `<span class="ack-indicator air" title="Pacchetto trasmesso via radio nell'etere dalla scheda Heltec">✓✓ Trasmesso RF</span>`;
+                    } else if (status === "sent_to_radio") {
+                        details += `<span class="ack-indicator sent" title="Preso in carico dalla scheda radio Heltec">✓ Inviato alla radio</span>`;
+                    } else if (status === "pending" || status === "queued") {
+                        details += `<span class="ack-indicator pending" title="In coda di trasmissione">⏳ In attesa...</span>`;
                     } else {
                         details += `<span class="ack-indicator sent">✓ Inviato</span>`;
                     }
@@ -3831,13 +3856,27 @@ def get_web_client_html() -> str:
                 }
             } else if (data.type === "message_in_flight") {
                 // Sent to radio, in the air
-                for (let i = messages.length - 1; i >= 0; i--) {
-                    if ((messages[i].source === "Web Client" || messages[i].source === "Telegram" || messages[i].source === "Web API") && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio" || messages[i].ack_status === "pending")) {
-                        messages[i].ack_status = data.status || "transmitted";
-                        if (messages[i].ack_nodes_count === undefined || messages[i].ack_nodes_count === null) {
-                            messages[i].ack_nodes_count = 0;
+                let matched = false;
+                if (data.msg_id) {
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                        if (messages[i].id && messages[i].id === data.msg_id) {
+                            if (messages[i].ack_status !== "confirmed") {
+                                messages[i].ack_status = data.status || "transmitted";
+                            }
+                            matched = true;
+                            break;
                         }
-                        break;
+                    }
+                }
+                if (!matched) {
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                        if ((messages[i].source === "Web Client" || messages[i].source === "Telegram" || messages[i].source === "Web API") && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio" || messages[i].ack_status === "pending")) {
+                            messages[i].ack_status = data.status || "transmitted";
+                            if (messages[i].ack_nodes_count === undefined || messages[i].ack_nodes_count === null) {
+                                messages[i].ack_nodes_count = 0;
+                            }
+                            break;
+                        }
                     }
                 }
                 saveMessagesToStorage();
@@ -3986,6 +4025,23 @@ def get_web_client_html() -> str:
             messages.push(optimisticMsg);
             saveMessagesToStorage();
             renderMessages();
+
+            // Airtime transition fallback: un pacchetto LoRa tipico impiega ~1.5 - 2.2s nell'etere.
+            // Garantisce il passaggio visivo alle due spunte (✓✓ Trasmesso RF) appena completato l'airtime.
+            setTimeout(() => {
+                let changed = false;
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i].client_id === clientMsgId && (messages[i].ack_status === "sent_to_radio" || messages[i].ack_status === "pending")) {
+                        messages[i].ack_status = "transmitted";
+                        changed = true;
+                        break;
+                    }
+                }
+                if (changed) {
+                    saveMessagesToStorage();
+                    renderMessages();
+                }
+            }, 2200);
 
             if (socket && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({

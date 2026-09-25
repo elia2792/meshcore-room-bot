@@ -575,18 +575,6 @@ def check_and_process_mention_reply(sender_node: str, channel_name: str, content
     my_name = node_info.get("name", "Buscate 🇮🇹").strip()
     clean_name = re.sub(r'[^\w\s-]', '', my_name).strip().lower()
     low = content_text.lower()
-    
-    # Riconosce formati di risposta o menzione a Buscate o Web-Operatore
-    is_reply = False
-    if f"@[{my_name.lower()}]" in low or f"@{my_name.lower()}" in low:
-        is_reply = True
-    elif clean_name and (f"@[{clean_name}]" in low or f"@{clean_name}" in low or clean_name in low):
-        is_reply = True
-    elif "@[web-operatore]" in low or "@web-operatore" in low:
-        is_reply = True
-
-    if not is_reply:
-        return None
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -594,45 +582,66 @@ def check_and_process_mention_reply(sender_node: str, channel_name: str, content
         cur = conn.cursor()
         # Cerca l'ultimo messaggio inviato da noi su questo canale
         cur.execute(
-            "SELECT id, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND channel = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, sender, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND channel = ? ORDER BY id DESC LIMIT 1",
             (channel_name,)
         )
         row = cur.fetchone()
         if not row:
             cur.execute(
-                "SELECT id, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1"
+                "SELECT id, sender, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1"
             )
             row = cur.fetchone()
 
-        if row:
-            msg_id = row["id"]
-            raw_nodes = row["ack_nodes"] or ""
-            nodes = []
-            if raw_nodes:
-                try:
-                    nodes = json.loads(raw_nodes)
-                except Exception:
-                    nodes = [raw_nodes]
-            if sender_node and sender_node not in nodes:
-                nodes.append(sender_node)
-            new_count = max(1, len(nodes))
-            dec_hops = decode_meshcore_hops(hops) if hops is not None else row["hops"]
-            nodes_json = json.dumps(nodes)
-
-            cur.execute(
-                "UPDATE messages SET ack_status = 'confirmed', ack_nodes_count = ?, ack_nodes = ?, hops = COALESCE(?, hops) WHERE id = ?",
-                (new_count, nodes_json, dec_hops, msg_id)
-            )
-            conn.commit()
+        if not row:
             conn.close()
-            return {
-                "msg_id": msg_id,
-                "ack_nodes_count": new_count,
-                "ack_nodes": nodes,
-                "node_name": sender_node,
-                "hops": dec_hops,
-                "channel": channel_name
-            }
+            return None
+
+        our_sender = (row["sender"] or "").strip().lower()
+        clean_sender = re.sub(r'[^\w\s-]', '', our_sender).strip()
+
+        # Riconosce formati di risposta o menzione a Buscate, al mittente del messaggio, o Web-Operatore
+        is_reply = False
+        if f"@[{my_name.lower()}]" in low or f"@{my_name.lower()}" in low:
+            is_reply = True
+        elif clean_name and (f"@[{clean_name}]" in low or f"@{clean_name}" in low or clean_name in low):
+            is_reply = True
+        elif "@[web-operatore]" in low or "@web-operatore" in low or "web-operatore" in low:
+            is_reply = True
+        elif clean_sender and len(clean_sender) >= 3 and (f"@[{clean_sender}]" in low or f"@{clean_sender}" in low or f" {clean_sender} " in f" {low} "):
+            is_reply = True
+
+        if not is_reply:
+            conn.close()
+            return None
+
+        msg_id = row["id"]
+        raw_nodes = row["ack_nodes"] or ""
+        nodes = []
+        if raw_nodes:
+            try:
+                nodes = json.loads(raw_nodes)
+            except Exception:
+                nodes = [raw_nodes]
+        if sender_node and sender_node not in nodes:
+            nodes.append(sender_node)
+        new_count = max(1, len(nodes))
+        dec_hops = decode_meshcore_hops(hops) if hops is not None else row["hops"]
+        nodes_json = json.dumps(nodes)
+
+        cur.execute(
+            "UPDATE messages SET ack_status = 'confirmed', ack_nodes_count = ?, ack_nodes = ?, hops = COALESCE(?, hops) WHERE id = ?",
+            (new_count, nodes_json, dec_hops, msg_id)
+        )
+        conn.commit()
+        conn.close()
+        return {
+            "msg_id": msg_id,
+            "ack_nodes_count": new_count,
+            "ack_nodes": nodes,
+            "node_name": sender_node,
+            "hops": dec_hops,
+            "channel": channel_name
+        }
         conn.close()
     except Exception as e:
         print("Error in check_and_process_mention_reply:", e)
@@ -2241,10 +2250,24 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     expected_ack = struct.unpack("<I", payload[2:6])[0] if len(payload) >= 6 else None
                     timeout_ms = struct.unpack("<I", payload[6:10])[0] if len(payload) >= 10 else 5000
                     print(f"LoRa Packet On Air: route_flag={route_flag}, expected_ack={expected_ack}, timeout={timeout_ms}ms")
+                    target_msg_id = None
+                    try:
+                        conn = sqlite3.connect(DB_PATH)
+                        cur = conn.cursor()
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') AND ack_status NOT IN ('confirmed') ORDER BY id DESC LIMIT 1")
+                        last_m = cur.fetchone()
+                        if last_m:
+                            target_msg_id = last_m[0]
+                            update_message_ack(target_msg_id, "transmitted", ack_nodes_count=0)
+                        conn.close()
+                    except Exception as e:
+                        print("Error updating transmitted status (code 6):", e)
+
                     await broadcast_to_browsers({
                         "type": "message_in_flight",
+                        "msg_id": target_msg_id,
                         "expected_ack": expected_ack,
-                        "status": "air",
+                        "status": "transmitted",
                         "ack_nodes_count": 0
                     })
 
@@ -2254,19 +2277,22 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
 
                 # RESP_CODE_OK = 0 (Heltec radio successfully transmitted the packet)
                 elif code == 0:
+                    target_msg_id = None
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
-                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') AND ack_status NOT IN ('confirmed', 'transmitted') ORDER BY id DESC LIMIT 1")
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') AND ack_status NOT IN ('confirmed') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
-                            update_message_ack(last_m[0], "transmitted", ack_nodes_count=0)
+                            target_msg_id = last_m[0]
+                            update_message_ack(target_msg_id, "transmitted", ack_nodes_count=0)
                         conn.close()
                     except Exception as e:
-                        print("Error updating transmitted status:", e)
+                        print("Error updating transmitted status (code 0):", e)
 
                     await broadcast_to_browsers({
                         "type": "message_in_flight",
+                        "msg_id": target_msg_id,
                         "status": "transmitted",
                         "ack_nodes_count": 0
                     })
