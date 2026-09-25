@@ -127,16 +127,21 @@ def init_db():
             snr REAL,
             hops INTEGER,
             ack_status TEXT DEFAULT 'pending',
-            rtt_ms INTEGER DEFAULT NULL
+            rtt_ms INTEGER DEFAULT NULL,
+            ack_nodes_count INTEGER DEFAULT 0
         )
     ''')
-    # Migrate columns if existing db lacks ack_status
+    # Migrate columns if existing db lacks ack_status, rtt_ms, or ack_nodes_count
     try:
         cursor.execute("ALTER TABLE messages ADD COLUMN ack_status TEXT DEFAULT 'pending'")
     except Exception:
         pass
     try:
         cursor.execute("ALTER TABLE messages ADD COLUMN rtt_ms INTEGER DEFAULT NULL")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE messages ADD COLUMN ack_nodes_count INTEGER DEFAULT 0")
     except Exception:
         pass
     cursor.execute('''
@@ -473,16 +478,18 @@ def get_topic_binding(chat_id: str, lora_channel_idx: int) -> Optional[int]:
         print("DB get_topic_binding error:", e)
         return None
 
-def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None, timestamp: Optional[str] = None) -> int:
+def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None, timestamp: Optional[str] = None, ack_nodes_count: Optional[int] = None) -> int:
     msg_id = 0
     dec_hops = decode_meshcore_hops(hops) if hops is not None else None
     ts = timestamp or get_rome_now_str()
+    if ack_nodes_count is None:
+        ack_nodes_count = 1 if ack_status == "confirmed" and source in ("Web Client", "Web API", "Telegram", "Echo Bot") else 0
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO messages (timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ts, source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms)
+            "INSERT INTO messages (timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms, ack_nodes_count)
         )
         msg_id = cursor.lastrowid
         conn.commit()
@@ -491,19 +498,25 @@ def save_message(source: str, sender: str, channel: str, content: str, snr: Opti
         print("DB save_message error:", e)
     return msg_id
 
-def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None):
+def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None, ack_nodes_count: Optional[int] = None):
     dec_hops = decode_meshcore_hops(hops) if hops is not None else None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        if rtt_ms is not None and dec_hops is not None:
-            cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ?, hops = ? WHERE id = ?", (ack_status, rtt_ms, dec_hops, msg_id))
-        elif rtt_ms is not None:
-            cursor.execute("UPDATE messages SET ack_status = ?, rtt_ms = ? WHERE id = ?", (ack_status, rtt_ms, msg_id))
-        elif dec_hops is not None:
-            cursor.execute("UPDATE messages SET ack_status = ?, hops = ? WHERE id = ?", (ack_status, dec_hops, msg_id))
-        else:
-            cursor.execute("UPDATE messages SET ack_status = ? WHERE id = ?", (ack_status, msg_id))
+        fields = ["ack_status = ?"]
+        params = [ack_status]
+        if rtt_ms is not None:
+            fields.append("rtt_ms = ?")
+            params.append(rtt_ms)
+        if dec_hops is not None:
+            fields.append("hops = ?")
+            params.append(dec_hops)
+        if ack_nodes_count is not None:
+            fields.append("ack_nodes_count = ?")
+            params.append(ack_nodes_count)
+        params.append(msg_id)
+        query = f"UPDATE messages SET {', '.join(fields)} WHERE id = ?"
+        cursor.execute(query, tuple(params))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -516,12 +529,12 @@ def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List
         cursor = conn.cursor()
         if channel:
             cursor.execute(
-                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
                 (channel, limit)
             )
         else:
             cursor.execute(
-                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms FROM messages ORDER BY id DESC LIMIT ?",
+                "SELECT id, timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms, ack_nodes_count FROM messages ORDER BY id DESC LIMIT ?",
                 (limit,)
             )
         rows = cursor.fetchall()
@@ -531,6 +544,10 @@ def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List
             d = dict(r)
             if d.get("hops") is not None:
                 d["hops"] = decode_meshcore_hops(d["hops"])
+            if d.get("ack_status") == "confirmed" and not d.get("ack_nodes_count"):
+                d["ack_nodes_count"] = 1
+            elif not d.get("ack_nodes_count"):
+                d["ack_nodes_count"] = 0
             res.append(d)
         return res
     except Exception as e:
@@ -1155,6 +1172,7 @@ async def websocket_client_endpoint(websocket: WebSocket):
                         "hops": 0,
                         "sent_to_radio": sent,
                         "ack_status": "sent_to_radio" if sent else "queued",
+                        "ack_nodes_count": 0,
                         "rtt_ms": None
                     })
             elif action == "refresh_channels":
@@ -1338,7 +1356,7 @@ async def api_send(request: Request):
     ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
     sender = str(body.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
 
-    save_message("Web API", sender, ch_name, text)
+    msg_id = save_message("Web API", sender, ch_name, text, ack_status="sent_to_radio", ack_nodes_count=0)
     frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
     sent = await send_to_heltec(frame)
 
@@ -1347,6 +1365,7 @@ async def api_send(request: Request):
 
     await broadcast_to_browsers({
         "type": "new_message",
+        "id": msg_id,
         "source": "Web API",
         "sender": sender,
         "channel": ch_name,
@@ -1355,7 +1374,9 @@ async def api_send(request: Request):
         "timestamp": get_rome_now_str(),
         "snr": None,
         "hops": 0,
-        "sent_to_radio": sent
+        "sent_to_radio": sent,
+        "ack_status": "sent_to_radio" if sent else "queued",
+        "ack_nodes_count": 0
     })
 
     return {"success": True, "sent_to_heltec": sent, "channel": ch_name}
@@ -1609,7 +1630,7 @@ async def api_manifest():
 @app.get("/sw.js")
 async def api_service_worker():
     sw_code = """
-const CACHE_NAME = 'meshcore-cache-v7';
+const CACHE_NAME = 'meshcore-cache-v8';
 self.addEventListener('install', (e) => {
     self.skipWaiting();
 });
@@ -1938,30 +1959,39 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     print(f"LoRa ACK Confirmed: code={ack_code}, RTT={rtt_str}, hops={hops_str}")
 
                     # Update database for the most recent outgoing message
+                    new_nodes_count = 1
+                    target_msg_id = None
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
-                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1")
+                        cur.execute("SELECT id, ack_nodes_count FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
-                            update_message_ack(last_m[0], "confirmed", round_trip_ms, hops)
+                            target_msg_id = last_m[0]
+                            prev_count = last_m[1] or 0
+                            new_nodes_count = prev_count + 1
+                            update_message_ack(target_msg_id, "confirmed", round_trip_ms, hops, ack_nodes_count=new_nodes_count)
                         conn.close()
                     except Exception as e:
                         print("Error updating ACK:", e)
 
+                    node_word = "1 nodo" if new_nodes_count == 1 else f"{new_nodes_count} nodi"
+
                     await broadcast_to_browsers({
                         "type": "message_ack",
+                        "msg_id": target_msg_id,
                         "ack_code": ack_code,
                         "round_trip_ms": round_trip_ms,
                         "hops": hops,
                         "hops_str": hops_str,
-                        "status": "confirmed"
+                        "status": "confirmed",
+                        "ack_nodes_count": new_nodes_count
                     })
 
                     # Notifica Telegram di ricezione confermata
                     ack_tg_text = (
-                        f"🟢 <b>✓✓ RECAPITATO CON SUCCESSO!</b>\n"
-                        f"📡 Il tuo messaggio è stato ricevuto e confermato da un nodo della rete mesh!\n"
+                        f"🟢 <b>✓✓ RICEVUTO DA {node_word.upper()}!</b>\n"
+                        f"📡 Il tuo messaggio è stato ricevuto e confermato da <b>{node_word}</b> della rete mesh!\n"
                         f"• 📶 <b>Percorso:</b> {hops_str}\n"
                         f"• ⏱️ <b>Round-Trip:</b> {rtt_str}"
                     )
@@ -1983,7 +2013,8 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     await broadcast_to_browsers({
                         "type": "message_in_flight",
                         "expected_ack": expected_ack,
-                        "status": "air"
+                        "status": "air",
+                        "ack_nodes_count": 0
                     })
 
                 # RESP_CODE_NO_MORE_MESSAGES = 10
@@ -1995,17 +2026,18 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
-                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND ack_status NOT IN ('confirmed', 'transmitted') ORDER BY id DESC LIMIT 1")
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') AND ack_status NOT IN ('confirmed', 'transmitted') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
-                            update_message_ack(last_m[0], "transmitted")
+                            update_message_ack(last_m[0], "transmitted", ack_nodes_count=0)
                         conn.close()
                     except Exception as e:
                         print("Error updating transmitted status:", e)
 
                     await broadcast_to_browsers({
                         "type": "message_in_flight",
-                        "status": "transmitted"
+                        "status": "transmitted",
+                        "ack_nodes_count": 0
                     })
 
     except WebSocketDisconnect:
@@ -2596,11 +2628,12 @@ async def telegram_polling_loop():
                                     "thread_id": thread_id,
                                     "timestamp": time.time()
                                 }
-                                save_message("Telegram", sender_name, ch_name, content)
+                                msg_id = save_message("Telegram", sender_name, ch_name, content, ack_status="sent_to_radio", ack_nodes_count=0)
                                 frame = build_channel_send_frame(resolved, f"[{sender_name}]: {content}")
                                 sent = await send_to_heltec(frame)
                                 await broadcast_to_browsers({
                                     "type": "new_message",
+                                    "id": msg_id,
                                     "source": "Telegram",
                                     "sender": sender_name,
                                     "channel": ch_name,
@@ -2609,7 +2642,9 @@ async def telegram_polling_loop():
                                     "timestamp": get_rome_now_str(),
                                     "snr": None,
                                     "hops": 0,
-                                    "sent_to_radio": sent
+                                    "sent_to_radio": sent,
+                                    "ack_status": "sent_to_radio" if sent else "queued",
+                                    "ack_nodes_count": 0
                                 })
                                 if sent:
                                     await send_telegram(f"📡 <i>Trasmesso su [Canale {resolved}: {ch_name}] via LoRa:</i>\n\"{content}\"", chat_id=chat_id, message_thread_id=thread_id)
@@ -2785,11 +2820,12 @@ async def telegram_polling_loop():
                             "thread_id": thread_id,
                             "timestamp": time.time()
                         }
-                        save_message("Telegram", sender_name, target_ch_name, payload_text)
+                        msg_id = save_message("Telegram", sender_name, target_ch_name, payload_text, ack_status="sent_to_radio", ack_nodes_count=0)
                         frame = build_channel_send_frame(target_ch_idx, f"[{sender_name}]: {payload_text}")
                         sent = await send_to_heltec(frame)
                         await broadcast_to_browsers({
                             "type": "new_message",
+                            "id": msg_id,
                             "source": "Telegram",
                             "sender": sender_name,
                             "channel": target_ch_name,
@@ -2798,7 +2834,9 @@ async def telegram_polling_loop():
                             "timestamp": get_rome_now_str(),
                             "snr": None,
                             "hops": 0,
-                            "sent_to_radio": sent
+                            "sent_to_radio": sent,
+                            "ack_status": "sent_to_radio" if sent else "queued",
+                            "ack_nodes_count": 0
                         })
                         if sent:
                             await send_telegram(f"📡 <i>Trasmesso su [Canale {target_ch_idx}: {target_ch_name}] via LoRa:</i>\n\"{payload_text}\"", chat_id=chat_id, message_thread_id=thread_id)
