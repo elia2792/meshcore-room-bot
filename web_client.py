@@ -1795,6 +1795,7 @@ def get_web_client_html() -> str:
                         <button id="exportMsgJsonBtn" class="btn-action btn-secondary" onclick="exportMessages('json')">📥 Esporta Chat (JSON)</button>
                         <button id="exportNodesCsvBtn" class="btn-action btn-secondary" onclick="exportNodes('csv')">📥 Esporta Nodi (CSV)</button>
                         <button id="backupConfigBtn" class="btn-action btn-secondary" onclick="exportBackupConfig()">💾 Backup Configurazione</button>
+                        <button id="inspectStorageBtn" class="btn-action" style="grid-column: 1 / -1; background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);" onclick="inspectAndRepairStorage()">🔍 Diagnostica Memoria & Ripristino Storico</button>
                     </div>
                     <div style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
                         <label style="font-size:0.8rem; color:var(--text-muted); display:block; margin-bottom:6px;">Ripristina Configurazione da File JSON:</label>
@@ -1971,13 +1972,136 @@ def get_web_client_html() -> str:
         
         const STORAGE_KEY = "meshcore_room_messages_v3";
 
+        // Epoch and timestamp helpers
+        function parseTimestampToEpochMs(ts) {
+            if (!ts) return Date.now();
+            if (typeof ts === "number") {
+                return ts < 1e11 ? ts * 1000 : ts;
+            }
+            const s = String(ts).trim();
+            if (!s) return Date.now();
+            if (/^\d{10,13}$/.test(s)) {
+                const n = Number(s);
+                return n < 1e11 ? n * 1000 : n;
+            }
+            // Standard ISO or YYYY-MM-DD HH:mm:ss
+            const norm = s.replace(" ", "T");
+            const parsed = Date.parse(norm);
+            if (!isNaN(parsed)) return parsed;
+            // Italian format DD/MM/YYYY HH:mm:ss
+            const dmy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})[ ,T]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/);
+            if (dmy) {
+                return new Date(dmy[3], dmy[2] - 1, dmy[1], dmy[4], dmy[5], dmy[6] || 0).getTime();
+            }
+            return Date.now();
+        }
+
         function getMsgKey(m) {
+            if (!m) return "";
             if (m.client_id) return `cid_${m.client_id}`;
-            return `${m.timestamp || ''}_${m.sender || ''}_${m.content || ''}`;
+            const epoch = m.epoch_ms || parseTimestampToEpochMs(m.timestamp);
+            const snd = (m.sender || "").trim();
+            const ch = (m.channel || "").trim();
+            const txt = (m.content || m.text || "").trim();
+            return `${epoch}_${snd}_${ch}_${txt}`;
+        }
+
+        function normalizeMessageObject(m) {
+            if (!m) return null;
+            const content = m.content || m.text || "";
+            if (!content && !m.sender) return null;
+            m.content = content;
+            if (!m.epoch_ms) {
+                m.epoch_ms = parseTimestampToEpochMs(m.timestamp);
+            }
+            if (!m.timestamp) {
+                const d = new Date(m.epoch_ms);
+                m.timestamp = d.getFullYear() + "-" +
+                    String(d.getMonth() + 1).padStart(2, '0') + "-" +
+                    String(d.getDate()).padStart(2, '0') + " " +
+                    String(d.getHours()).padStart(2, '0') + ":" +
+                    String(d.getMinutes()).padStart(2, '0') + ":" +
+                    String(d.getSeconds()).padStart(2, '0');
+            }
+            return m;
+        }
+
+        function formatMsgDisplayTime(m) {
+            if (!m) return "";
+            const epoch = m.epoch_ms || parseTimestampToEpochMs(m.timestamp);
+            if (epoch > 0) {
+                const d = new Date(epoch);
+                return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+            }
+            if (m.timestamp && typeof m.timestamp === "string") {
+                const match = m.timestamp.match(/(\d{1,2}:\d{2})/);
+                if (match) return match[1];
+            }
+            return "";
+        }
+
+        // ── IndexedDB Engine (MeshCoreStorage) ──────────────────────────────────
+        let idbInstance = null;
+        function getIDB() {
+            if (idbInstance) return Promise.resolve(idbInstance);
+            return new Promise((resolve) => {
+                if (!window.indexedDB) {
+                    resolve(null);
+                    return;
+                }
+                try {
+                    const req = indexedDB.open("MeshCoreDB", 1);
+                    req.onupgradeneeded = (e) => {
+                        const db = e.target.result;
+                        if (!db.objectStoreNames.contains("messages")) {
+                            db.createObjectStore("messages", { keyPath: "storage_id", autoIncrement: true });
+                        }
+                    };
+                    req.onsuccess = (e) => {
+                        idbInstance = e.target.result;
+                        resolve(idbInstance);
+                    };
+                    req.onerror = () => resolve(null);
+                } catch(e) {
+                    resolve(null);
+                }
+            });
+        }
+
+        async function saveMessagesToIDB(msgs) {
+            const db = await getIDB();
+            if (!db) return;
+            try {
+                const tx = db.transaction("messages", "readwrite");
+                const store = tx.objectStore("messages");
+                store.clear();
+                msgs.forEach(m => {
+                    store.put(m);
+                });
+            } catch(e) {
+                console.warn("IDB write error:", e);
+            }
+        }
+
+        async function loadMessagesFromIDB() {
+            const db = await getIDB();
+            if (!db) return [];
+            return new Promise((resolve) => {
+                try {
+                    const tx = db.transaction("messages", "readonly");
+                    const store = tx.objectStore("messages");
+                    const req = store.getAll();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                } catch(e) {
+                    resolve([]);
+                }
+            });
         }
 
         function loadMessagesFromStorage() {
             let allArrays = [];
+            const legacyKeysToRemove = [];
 
             try {
                 for (let i = 0; i < localStorage.length; i++) {
@@ -1989,6 +2113,9 @@ def get_web_client_html() -> str:
                                 const parsed = JSON.parse(raw);
                                 if (Array.isArray(parsed) && parsed.length > 0) {
                                     allArrays.push({ key: key, count: parsed.length, items: parsed });
+                                    if (key !== STORAGE_KEY) {
+                                        legacyKeysToRemove.push(key);
+                                    }
                                 }
                             }
                         } catch(e) {}
@@ -2003,24 +2130,11 @@ def get_web_client_html() -> str:
             const seenSignatures = new Set();
 
             allArrays.forEach((arr) => {
-                arr.items.forEach((m, idx) => {
+                arr.items.forEach((item) => {
+                    const m = normalizeMessageObject(item);
                     if (!m) return;
-                    const content = m.content || m.text || "";
-                    if (!content && !m.sender) return;
-                    m.content = content;
 
-                    const ts = m.timestamp || "";
-                    const snd = m.sender || "";
-                    const ch = m.channel || "";
-                    const snr = m.snr !== undefined && m.snr !== null ? String(m.snr) : "";
-                    const hops = m.hops !== undefined && m.hops !== null ? String(m.hops) : "";
-                    const cid = m.client_id || "";
-
-                    let sig = cid ? `cid_${cid}` : `${ts}|${snd}|${ch}|${snr}|${hops}|${content}`;
-                    if (!ts && !cid) {
-                        sig += `_idx_${idx}_${arr.key}`;
-                    }
-
+                    const sig = getMsgKey(m);
                     if (!seenSignatures.has(sig)) {
                         seenSignatures.add(sig);
                         combined.push(m);
@@ -2028,25 +2142,71 @@ def get_web_client_html() -> str:
                 });
             });
 
-            combined.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+            // Sort strictly chronologically by epoch ms
+            combined.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+
+            // Clean up legacy duplicated keys from localStorage to prevent QuotaExceededError
+            legacyKeysToRemove.forEach(k => {
+                try { localStorage.removeItem(k); } catch(e) {}
+            });
+
+            // Save recent messages synchronously to localStorage as fast boot cache (max 400 items, ~120KB)
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-2500)));
-            } catch(e) {}
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-400)));
+            } catch(e) {
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(combined.slice(-150)));
+                } catch(e2) {}
+            }
+
             return combined;
         }
 
         function saveMessagesToStorage() {
+            // Sort chronologically
+            messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+
+            // Save to LocalStorage fast cache (last 400 messages to never exceed quota)
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-2500)));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-400)));
             } catch(e) {
                 console.warn("Storage save error:", e);
                 try {
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-800)));
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-150)));
                 } catch(e2) {}
             }
+
+            // Also persist ALL messages to IndexedDB (unlimited storage)
+            saveMessagesToIDB(messages);
         }
 
         let messages = loadMessagesFromStorage();
+
+        // Hydrate from IndexedDB in the background to ensure all long-term messages are loaded
+        loadMessagesFromIDB().then((idbMsgs) => {
+            if (idbMsgs && idbMsgs.length > 0) {
+                const existingKeys = new Set(messages.map(getMsgKey));
+                let added = 0;
+                idbMsgs.forEach(item => {
+                    const m = normalizeMessageObject(item);
+                    if (!m) return;
+                    const key = getMsgKey(m);
+                    if (!existingKeys.has(key)) {
+                        messages.push(m);
+                        existingKeys.add(key);
+                        added++;
+                    }
+                });
+                if (added > 0) {
+                    messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+                    renderChannelsBar();
+                    renderMessages();
+                    scrollChatToBottom();
+                }
+            } else if (messages.length > 0) {
+                saveMessagesToIDB(messages);
+            }
+        });
         let socket = null;
         let audioEnabled = true;
         let audioCtx = null;
@@ -2715,6 +2875,52 @@ def get_web_client_html() -> str:
             showToast("Backup configurazione scaricato!", true);
         };
 
+        window.inspectAndRepairStorage = async function() {
+            let info = "📊 Diagnostica Memoria MeshCore:\n\n";
+            info += `• Messaggi visualizzati in chat: ${messages.length}\n`;
+            
+            // Check IndexedDB
+            const idbMsgs = await loadMessagesFromIDB();
+            info += `• Messaggi in IndexedDB permanente: ${idbMsgs.length}\n`;
+
+            // Check LocalStorage keys
+            let totalLsKb = 0;
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                const v = localStorage.getItem(k) || "";
+                totalLsKb += (v.length / 1024);
+                if (k && (k.includes("mesh") || k.includes("message") || k.includes("chat") || k.includes("room"))) {
+                    info += `  - ${k}: ${(v.length / 1024).toFixed(1)} KB\n`;
+                }
+            }
+            info += `• Spazio totale LocalStorage: ${totalLsKb.toFixed(1)} KB\n\n`;
+
+            if (idbMsgs.length > messages.length) {
+                const existingKeys = new Set(messages.map(getMsgKey));
+                let recovered = 0;
+                idbMsgs.forEach(item => {
+                    const m = normalizeMessageObject(item);
+                    if (!m) return;
+                    const key = getMsgKey(m);
+                    if (!existingKeys.has(key)) {
+                        messages.push(m);
+                        existingKeys.add(key);
+                        recovered++;
+                    }
+                });
+                messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+                saveMessagesToStorage();
+                renderChannelsBar();
+                renderMessages();
+                scrollChatToBottom();
+                info += `✅ Ripristinati ${recovered} messaggi storici dall'IndexedDB!`;
+            } else {
+                saveMessagesToStorage();
+                info += `✅ Memoria sincronizzata e ottimizzata (IndexedDB + Cache attiva).`;
+            }
+            alert(info);
+        };
+
         window.importRestoreConfig = function(event) {
             const file = event.target.files && event.target.files[0];
             if (!file) return;
@@ -2937,7 +3143,9 @@ def get_web_client_html() -> str:
                     if (serverMsgs && serverMsgs.length > 0) {
                         const existingKeys = new Set(messages.map(getMsgKey));
                         let added = 0;
-                        serverMsgs.forEach(m => {
+                        serverMsgs.forEach(item => {
+                            const m = normalizeMessageObject(item);
+                            if (!m) return;
                             const key = getMsgKey(m);
                             if (!existingKeys.has(key)) {
                                 if (m.channel_idx === undefined || m.channel_idx === null) m.channel_idx = channelIdx;
@@ -2947,7 +3155,7 @@ def get_web_client_html() -> str:
                             }
                         });
                         if (added > 0) {
-                            messages.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+                            messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
                             saveMessagesToStorage();
                             renderMessages();
                         }
@@ -3110,7 +3318,7 @@ def get_web_client_html() -> str:
                 const footer = document.createElement("div");
                 footer.className = "msg-footer";
 
-                const timeStr = m.timestamp ? m.timestamp.substring(11, 16) : "";
+                const timeStr = formatMsgDisplayTime(m);
                 let details = `<span>${timeStr}</span>`;
 
                 if (m.snr !== undefined && m.snr !== null) {
@@ -3355,15 +3563,21 @@ def get_web_client_html() -> str:
                 if (data.node_info) nodeInfo = Object.assign(nodeInfo, data.node_info);
                 if (data.recent_messages && data.recent_messages.length > 0) {
                     const existingKeys = new Set(messages.map(getMsgKey));
-                    data.recent_messages.forEach(m => {
+                    let added = 0;
+                    data.recent_messages.forEach(item => {
+                        const m = normalizeMessageObject(item);
+                        if (!m) return;
                         const key = getMsgKey(m);
                         if (!existingKeys.has(key)) {
                             messages.push(m);
                             existingKeys.add(key);
+                            added++;
                         }
                     });
-                    messages.sort((a,b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
-                    saveMessagesToStorage();
+                    if (added > 0) {
+                        messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
+                        saveMessagesToStorage();
+                    }
                 }
                 if (data.recent_nodes) heardNodes = data.recent_nodes;
                 updateHeader();
@@ -3387,26 +3601,28 @@ def get_web_client_html() -> str:
                 updateHeader();
                 populateSettingsInputs();
             } else if (data.type === "new_message") {
+                const normMsg = normalizeMessageObject(data) || data;
                 let matched = false;
-                if (data.client_id) {
+                if (normMsg.client_id) {
                     for (let i = messages.length - 1; i >= 0; i--) {
-                        if (messages[i].client_id === data.client_id) {
-                            Object.assign(messages[i], data);
+                        if (messages[i].client_id === normMsg.client_id) {
+                            Object.assign(messages[i], normMsg);
                             matched = true;
                             break;
                         }
                     }
                 }
                 if (!matched) {
-                    const key = getMsgKey(data);
+                    const key = getMsgKey(normMsg);
                     const exists = messages.some(m => getMsgKey(m) === key);
                     if (!exists) {
-                        messages.push(data);
-                        if (messages.length > 500) messages.shift();
+                        messages.push(normMsg);
                     }
                 }
+                messages.sort((a, b) => (a.epoch_ms || 0) - (b.epoch_ms || 0));
                 saveMessagesToStorage();
                 renderMessages();
+                scrollChatToBottom();
                 if (data.source === "LoRa Mesh") {
                     playChime("recv");
                     showToast(`Nuovo messaggio LoRa su [${data.channel}]: ${data.content.substring(0, 40)}`, true);
@@ -3507,6 +3723,14 @@ def get_web_client_html() -> str:
             const clientMsgId = "msg_" + Date.now();
             const targetChannelIdx = activeChannelIdx === -1 ? 0 : activeChannelIdx;
             const chName = channels[targetChannelIdx] || `Canale ${targetChannelIdx}`;
+            const now = new Date();
+            const localTs = now.getFullYear() + "-" +
+                String(now.getMonth() + 1).padStart(2, '0') + "-" +
+                String(now.getDate()).padStart(2, '0') + " " +
+                String(now.getHours()).padStart(2, '0') + ":" +
+                String(now.getMinutes()).padStart(2, '0') + ":" +
+                String(now.getSeconds()).padStart(2, '0');
+
             const optimisticMsg = {
                 client_id: clientMsgId,
                 source: "Web Client",
@@ -3516,7 +3740,8 @@ def get_web_client_html() -> str:
                 content: text,
                 reply_to_sender: replySender,
                 reply_to_text: replyText,
-                timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+                timestamp: localTs,
+                epoch_ms: now.getTime(),
                 snr: null,
                 hops: 0,
                 sent_to_radio: false,

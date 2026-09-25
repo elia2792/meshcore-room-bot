@@ -8,6 +8,24 @@ import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
+# Timezone Configuration (Europe/Rome - UTC+2 CEST / UTC+1 CET)
+try:
+    import zoneinfo
+    ROME_TZ = zoneinfo.ZoneInfo("Europe/Rome")
+except Exception:
+    try:
+        from backports import zoneinfo
+        ROME_TZ = zoneinfo.ZoneInfo("Europe/Rome")
+    except Exception:
+        from datetime import timezone, timedelta
+        ROME_TZ = timezone(timedelta(hours=2))
+
+def get_rome_now() -> datetime:
+    return datetime.now(ROME_TZ)
+
+def get_rome_now_str() -> str:
+    return get_rome_now().strftime("%Y-%m-%d %H:%M:%S")
+
 # Ensure current directory is in sys.path for Render/Docker uvicorn runners
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
@@ -322,7 +340,7 @@ async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, con
             "channel": ch_name,
             "channel_idx": ch_idx,
             "content": resp_text,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp": get_rome_now_str(),
             "snr": None,
             "hops": 0
         })
@@ -365,21 +383,22 @@ def record_heard_node(node_name: str, snr: Optional[float], raw_hops: Optional[i
     if not node_name or node_name in ("Nodo Radio", "Unknown", "Utente"):
         return
     hops = decode_meshcore_hops(raw_hops)
+    now_str = get_rome_now_str()
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO heard_nodes (node_name, last_seen, last_snr, last_hops, last_channel, lat, lon, packets_count)
-            VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, 1)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
             ON CONFLICT(node_name) DO UPDATE SET
-                last_seen = CURRENT_TIMESTAMP,
+                last_seen = ?,
                 last_snr = COALESCE(excluded.last_snr, heard_nodes.last_snr),
                 last_hops = excluded.last_hops,
                 last_channel = excluded.last_channel,
                 lat = COALESCE(excluded.lat, heard_nodes.lat),
                 lon = COALESCE(excluded.lon, heard_nodes.lon),
                 packets_count = heard_nodes.packets_count + 1
-        ''', (node_name, snr, hops, channel, lat, lon))
+        ''', (node_name, now_str, snr, hops, channel, lat, lon, now_str))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -454,15 +473,16 @@ def get_topic_binding(chat_id: str, lora_channel_idx: int) -> Optional[int]:
         print("DB get_topic_binding error:", e)
         return None
 
-def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None) -> int:
+def save_message(source: str, sender: str, channel: str, content: str, snr: Optional[float] = None, hops: Optional[int] = None, ack_status: str = "confirmed", rtt_ms: Optional[int] = None, timestamp: Optional[str] = None) -> int:
     msg_id = 0
     dec_hops = decode_meshcore_hops(hops) if hops is not None else None
+    ts = timestamp or get_rome_now_str()
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO messages (source, sender, channel, content, snr, hops, ack_status, rtt_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms)
+            "INSERT INTO messages (timestamp, source, sender, channel, content, snr, hops, ack_status, rtt_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, source, sender, channel, content, snr, dec_hops, ack_status, rtt_ms)
         )
         msg_id = cursor.lastrowid
         conn.commit()
@@ -549,7 +569,7 @@ def format_signal_info(snr: Optional[float], path_len: Optional[int]) -> str:
     else:
         hops_str = f"🔀 {hops} salti"
     
-    now_time = datetime.now().strftime("%H:%M")
+    now_time = get_rome_now().strftime("%H:%M")
     return f"📡 Segnale: <b>{snr_str}</b> | Percorso: <b>{hops_str}</b> | ⏱️ {now_time}"
 
 def build_message_inline_keyboard(ch_idx: int, ch_name: str) -> dict:
@@ -1130,7 +1150,7 @@ async def websocket_client_endpoint(websocket: WebSocket):
                         "content": text,
                         "reply_to_sender": reply_to_sender,
                         "reply_to_text": reply_to_text,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "timestamp": get_rome_now_str(),
                         "snr": None,
                         "hops": 0,
                         "sent_to_radio": sent,
@@ -1332,7 +1352,7 @@ async def api_send(request: Request):
         "channel": ch_name,
         "channel_idx": ch_idx,
         "content": text,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": get_rome_now_str(),
         "snr": None,
         "hops": 0,
         "sent_to_radio": sent
@@ -1589,7 +1609,7 @@ async def api_manifest():
 @app.get("/sw.js")
 async def api_service_worker():
     sw_code = """
-const CACHE_NAME = 'meshcore-cache-v5';
+const CACHE_NAME = 'meshcore-cache-v6';
 self.addEventListener('install', (e) => {
     self.skipWaiting();
 });
@@ -1622,7 +1642,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
     global active_heltec_ws, stats, discovered_channels, node_info
     await websocket.accept()
     active_heltec_ws = websocket
-    stats["connected_since"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stats["connected_since"] = get_rome_now_str()
     stats["last_seen"] = stats["connected_since"]
     
     print("Heltec V3 connected via WebSocket!")
@@ -1641,7 +1661,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_bytes()
             stats["packets_rx"] += 1
-            stats["last_seen"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            stats["last_seen"] = get_rome_now_str()
 
             if len(data) >= 3 and data[0] == ord('>'):
                 length = struct.unpack("<H", data[1:3])[0]
@@ -1754,7 +1774,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         "channel": ch_name,
                         "channel_idx": ch_idx,
                         "content": content_text,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "timestamp": get_rome_now_str(),
                         "snr": snr,
                         "hops": hops,
                         "lat": lat,
@@ -1818,7 +1838,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         "channel": ch_name,
                         "channel_idx": ch_idx,
                         "content": content_text,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "timestamp": get_rome_now_str(),
                         "snr": None,
                         "hops": hops,
                         "lat": lat,
@@ -1888,7 +1908,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                             "channel": "Direct",
                             "channel_idx": 0,
                             "content": msg_text,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "timestamp": get_rome_now_str(),
                             "snr": None,
                             "hops": 0
                         })
@@ -2275,7 +2295,7 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
         if active_heltec_ws:
             frame = build_set_device_time_frame()
             sent = await send_to_heltec(frame)
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ts = get_rome_now_str()
             if sent:
                 await send_telegram(f"🕐 <b>Orario sincronizzato!</b>\n<code>{ts}</code>", chat_id=chat_id, reply_markup=build_settings_keyboard())
             else:
@@ -2586,7 +2606,7 @@ async def telegram_polling_loop():
                                     "channel": ch_name,
                                     "channel_idx": resolved,
                                     "content": content,
-                                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "timestamp": get_rome_now_str(),
                                     "snr": None,
                                     "hops": 0,
                                     "sent_to_radio": sent
@@ -2775,7 +2795,7 @@ async def telegram_polling_loop():
                             "channel": target_ch_name,
                             "channel_idx": target_ch_idx,
                             "content": payload_text,
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "timestamp": get_rome_now_str(),
                             "snr": None,
                             "hops": 0,
                             "sent_to_radio": sent
