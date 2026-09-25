@@ -585,6 +585,64 @@ def get_web_client_html() -> str:
             100% { transform: scale(1.0); box-shadow: 0 0 10px rgba(16, 185, 129, 0.25); }
         }
 
+        /* Radar Sonar Animation for Direct Node Search */
+        .radar-box {
+            position: relative;
+            width: 140px;
+            height: 140px;
+            margin: 0 auto 16px auto;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(16, 185, 129, 0.05) 0%, rgba(16, 185, 129, 0.18) 100%);
+            border: 2px solid rgba(16, 185, 129, 0.4);
+            box-shadow: 0 0 24px rgba(16, 185, 129, 0.25), inset 0 0 20px rgba(16, 185, 129, 0.15);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .radar-sweep-beam {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 70px;
+            height: 70px;
+            transform-origin: top left;
+            background: conic-gradient(from 0deg, rgba(16, 185, 129, 0.6) 0deg, rgba(16, 185, 129, 0.1) 45deg, transparent 60deg);
+            animation: radarRotate 2s linear infinite;
+        }
+        .radar-crosshair-h {
+            position: absolute;
+            width: 100%;
+            height: 1px;
+            background: rgba(16, 185, 129, 0.25);
+        }
+        .radar-crosshair-v {
+            position: absolute;
+            height: 100%;
+            width: 1px;
+            background: rgba(16, 185, 129, 0.25);
+        }
+        .radar-ring-inner {
+            position: absolute;
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 1px dashed rgba(16, 185, 129, 0.35);
+        }
+        .radar-center-blip {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 10px #10b981;
+            z-index: 2;
+        }
+        @keyframes radarRotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
         .reply-bar {
             display: flex;
             align-items: center;
@@ -1519,7 +1577,10 @@ def get_web_client_html() -> str:
             <div class="content-scroll">
                 <div class="section-header">
                     <div class="section-title">👥 Nodi Radio Ascoltati (<span id="nodesCount">0</span>)</div>
-                    <button id="refreshNodesBtn" class="btn-icon">🔄 Aggiorna</button>
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        <button id="scanDirectNodesBtn" class="btn-action" style="padding:4px 10px; font-size:0.75rem; background:linear-gradient(135deg, #059669, #10b981); color:white; border:none; border-radius:14px; font-weight:700; display:flex; align-items:center; gap:4px; cursor:pointer;" title="Invia beacon advert zero-hop e cerca nodi a portata RF diretta (0 salti)">🎯 Cerca Diretti</button>
+                        <button id="refreshNodesBtn" class="btn-icon">🔄 Aggiorna</button>
+                    </div>
                 </div>
                 <div class="nodes-filter-bar">
                     <button id="filterNodesAll" class="filter-chip active" onclick="setNodesFilter('all')">
@@ -1853,14 +1914,15 @@ def get_web_client_html() -> str:
                     </div>
                 </div>
 
-                <!-- 8. Trova Nodi Vicini (Discovery) -->
+                <!-- 8. Trova Nodi & Scansione Diretta (Discovery) -->
                 <div class="settings-card">
-                    <div class="settings-card-title">🔍 Trova Nodi Vicini & Scansione Mesh</div>
+                    <div class="settings-card-title">🔍 Ricerca Nodi & Scansione RF Diretta</div>
                     <p style="font-size:0.8rem; color:var(--text-muted);">
-                        Invia un annuncio radio beacon (zero-hop) e interroga la tabella dei nodi per identificare e sincronizzare tutti i dispositivi LoRa nel raggio d'ascolto.
+                        Invia beacon advert zero-hop per identificare i nodi raggiungibili via RF diretta (0 salti senza ripetitori) o esegui una scansione flood dell'intera rete mesh.
                     </p>
                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:2px;">
-                        <button id="findNearbyNodesBtn" class="btn-action" style="flex:1;">📡 Trova Nodi Vicini</button>
+                        <button id="findDirectNodesBtn" class="btn-action" style="flex:1; background:linear-gradient(135deg, #059669, #10b981); border:none; color:white; font-weight:700;">🎯 Cerca Nodi Diretti (0 salti)</button>
+                        <button id="findNearbyNodesBtn" class="btn-action btn-secondary" style="flex:1;">🌐 Scansione Rete Mesh</button>
                         <button id="getGpsLocationBtn" class="btn-action btn-secondary" style="flex:1;">📍 Usa GPS Telefono / Browser</button>
                     </div>
                 </div>
@@ -3032,7 +3094,7 @@ def get_web_client_html() -> str:
         };
 
         // Show Scan Results Modal Dialog
-        function showScanResultsModal(nodesList, isScanning = false) {
+        function showScanResultsModal(nodesList, isScanning = false, isDirectOnly = false) {
             const overlay = document.getElementById("scanModalOverlay");
             const body = document.getElementById("scanModalBody");
             const summary = document.getElementById("scanModalSummary");
@@ -3046,36 +3108,78 @@ def get_web_client_html() -> str:
             });
 
             if (isScanning) {
-                summary.textContent = "Scansione radio LoRa in corso...";
-                body.innerHTML = `
-                    <div style="text-align: center; color: var(--text-muted); padding: 36px 12px;">
-                        <div style="font-size: 2.6rem; animation: pulseGlow 1.5s infinite ease-in-out; margin-bottom: 12px;">📡</div>
-                        <b style="color: var(--text-main); font-size: 1.05rem;">Scansione radio LoRa in corso...</b>
-                        <div style="font-size: 0.82rem; margin-top: 8px; color: var(--primary);">
-                            Invio beacon zero-hop e sincronizzazione tabella contatti...
+                if (isDirectOnly) {
+                    summary.textContent = "Scansione nodi diretti RF in corso...";
+                    body.innerHTML = `
+                        <div style="text-align: center; color: var(--text-muted); padding: 24px 12px;">
+                            <div class="radar-box">
+                                <div class="radar-crosshair-h"></div>
+                                <div class="radar-crosshair-v"></div>
+                                <div class="radar-ring-inner"></div>
+                                <div class="radar-center-blip"></div>
+                                <div class="radar-sweep-beam"></div>
+                            </div>
+                            <b style="color: #10b981; font-size: 1.15rem; display: block;">🎯 Scansione Nodi Diretti RF in corso...</b>
+                            <div style="font-size: 0.85rem; margin-top: 6px; color: var(--text-main);">
+                                Trasmissione Beacon Zero-Hop su <b>${nodeInfo.freq_mhz || 869.618} MHz</b>...
+                            </div>
+                            <div style="font-size: 0.78rem; margin-top: 4px; color: var(--text-muted);">
+                                In ascolto segnali a 0 salti RF senza intermediari o ripetitori...
+                            </div>
                         </div>
-                        <div style="margin-top: 16px; display: flex; justify-content: center;">
-                            <div class="pulse-dot" style="background: var(--primary); width: 14px; height: 14px; border-radius: 50%;"></div>
+                    `;
+                } else {
+                    summary.textContent = "Scansione radio LoRa in corso...";
+                    body.innerHTML = `
+                        <div style="text-align: center; color: var(--text-muted); padding: 36px 12px;">
+                            <div style="font-size: 2.6rem; animation: pulseGlow 1.5s infinite ease-in-out; margin-bottom: 12px;">📡</div>
+                            <b style="color: var(--text-main); font-size: 1.05rem;">Scansione radio LoRa in corso...</b>
+                            <div style="font-size: 0.82rem; margin-top: 8px; color: var(--primary);">
+                                Invio beacon mesh e sincronizzazione tabella contatti...
+                            </div>
+                            <div style="margin-top: 16px; display: flex; justify-content: center;">
+                                <div class="pulse-dot" style="background: var(--primary); width: 14px; height: 14px; border-radius: 50%;"></div>
+                            </div>
                         </div>
-                    </div>
-                `;
+                    `;
+                }
                 return;
             }
 
             body.innerHTML = "";
-            const list = (nodesList && nodesList.length > 0) ? nodesList : heardNodes;
+            let list = (nodesList && nodesList.length > 0) ? nodesList : heardNodes;
+            if (isDirectOnly) {
+                list = list.filter(n => decodeHops(n.last_hops) === 0);
+            }
 
             if (!list || list.length === 0) {
-                body.innerHTML = `
-                    <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
-                        <div style="font-size: 2.2rem; margin-bottom: 8px;">📡</div>
-                        <b style="color: var(--text-main);">Nessun nodo rilevato nelle immediate vicinanze.</b>
-                        <div style="font-size: 0.8rem; margin-top: 6px; color: var(--text-dim);">
-                            I beacon radio zero-hop sono stati inviati. Assicurati che altri nodi LoRa siano accesi sullo stesso canale e frequenza (${nodeInfo.freq_mhz || 869.618} MHz).
+                if (isDirectOnly) {
+                    body.innerHTML = `
+                        <div style="text-align: center; color: var(--text-muted); padding: 24px 10px;">
+                            <div style="font-size: 2.6rem; margin-bottom: 8px;">🎯</div>
+                            <b style="color: var(--text-main); font-size: 1.05rem;">Nessun nodo ascoltato direttamente (0 salti) al momento.</b>
+                            <div style="font-size: 0.82rem; margin-top: 8px; color: var(--text-muted); line-height: 1.5; max-width: 440px; margin-left: auto; margin-right: auto;">
+                                Il beacon advert zero-hop è stato trasmesso su <b>${nodeInfo.freq_mhz || 869.618} MHz</b> senza passare da ripetitori.<br>
+                                I nodi attualmente ricevuti sono passati tramite percorsi/ripetitori mesh.
+                                <div style="margin-top:12px; padding:10px 12px; background:rgba(16,185,129,0.08); border-left:3px solid #10b981; border-radius:6px; text-align:left; font-size:0.78rem; color:var(--text-main);">
+                                    💡 <b>Consiglio RF Diretta:</b> Orienta l'antenna direttiva verso la stazione desiderata, verifica la polarizzazione verticale o aumenta l'elevazione rispetto ad ostacoli orografici o edifici.
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                `;
-                summary.textContent = "Scansione terminata (0 nodi).";
+                    `;
+                    summary.textContent = "Scansione terminata: 0 nodi diretti RF (in ascolto radar continuo).";
+                } else {
+                    body.innerHTML = `
+                        <div style="text-align: center; color: var(--text-muted); padding: 30px 10px;">
+                            <div style="font-size: 2.2rem; margin-bottom: 8px;">📡</div>
+                            <b style="color: var(--text-main);">Nessun nodo rilevato nelle immediate vicinanze.</b>
+                            <div style="font-size: 0.8rem; margin-top: 6px; color: var(--text-dim);">
+                                I beacon radio sono stati inviati. Assicurati che altri nodi LoRa siano accesi sullo stesso canale e frequenza (${nodeInfo.freq_mhz || 869.618} MHz).
+                            </div>
+                        </div>
+                    `;
+                    summary.textContent = "Scansione terminata (0 nodi).";
+                }
                 return;
             }
 
@@ -3089,20 +3193,23 @@ def get_web_client_html() -> str:
                 const nLat = (n.lat !== null && n.lat !== undefined) ? Number(n.lat) : null;
                 const nLon = (n.lon !== null && n.lon !== undefined) ? Number(n.lon) : null;
 
-                // Compute distance
+                // Compute distance and bearing
                 let distStr = "Non disp. (senza GPS)";
                 let distNum = null;
                 if (myLat && myLon && nLat && nLon) {
                     const d = calculateDistanceKm(myLat, myLon, nLat, nLon);
+                    const bear = calcBearing(myLat, myLon, nLat, nLon);
                     if (d !== null) {
                         distNum = d;
-                        distStr = d < 1 ? `${Math.round(d * 1000)} metri` : `${d.toFixed(2)} km`;
+                        const distFormatted = d < 1 ? `${Math.round(d * 1000)} metri` : `${d.toFixed(2)} km`;
+                        distStr = bear ? `${distFormatted} (🧭 ${bear.dir} ${bear.deg}°)` : distFormatted;
                     }
                 } else if (!myLat || !myLon) {
                     distStr = "Imposta GPS stazione per calcolare";
                 }
 
                 const snrVal = (n.last_snr !== null && n.last_snr !== undefined) ? `${n.last_snr > 0 ? '+' : ''}${Number(n.last_snr).toFixed(1)} dB` : "N/A";
+                const sMeter = (n.last_snr !== null && n.last_snr !== undefined) ? renderSMeterBars(n.last_snr) : "";
                 const hops = decodeHops(n.last_hops);
                 const hopsVal = hops === 0 ? "🎯 0 (Diretto RF)" : `🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                 const packetsVal = n.packets_count || 1;
@@ -3115,20 +3222,23 @@ def get_web_client_html() -> str:
                             <span>📻</span>
                             <span>${escapeHtml(n.node_name)}</span>
                         </div>
-                        <span class="node-badge" style="font-size:0.75rem;">${escapeHtml(channelVal)}</span>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span class="node-badge" style="font-size:0.75rem;">${escapeHtml(channelVal)}</span>
+                            <button class="btn-icon" style="padding:2px 7px; font-size:0.7rem; color:var(--accent-blue);" onclick="closeScanResultsModal(); openDirectMessage('${escapeJsString(n.node_name)}');">💬 DM</button>
+                        </div>
                     </div>
                     <div class="scan-telemetry-grid">
                         <div class="telemetry-item">
-                            <span class="telemetry-label">📏 Distanza</span>
+                            <span class="telemetry-label">📏 Distanza / Azimut</span>
                             <span class="telemetry-val" style="color:${distNum ? '#10b981' : 'var(--text-muted)'}; font-weight:700;">${distStr}</span>
                         </div>
                         <div class="telemetry-item">
                             <span class="telemetry-label">📶 Segnale SNR</span>
-                            <span class="telemetry-val">${snrVal}</span>
+                            <span class="telemetry-val">${sMeter}${snrVal}</span>
                         </div>
                         <div class="telemetry-item">
                             <span class="telemetry-label">🔀 Salti / Hops</span>
-                            <span class="telemetry-val">${hopsVal}</span>
+                            <span class="telemetry-val" style="color:${hops === 0 ? '#10b981' : 'inherit'}; font-weight:${hops === 0 ? '700' : 'normal'};">${hopsVal}</span>
                         </div>
                         <div class="telemetry-item">
                             <span class="telemetry-label">📦 Pacchetti RX</span>
@@ -3147,7 +3257,11 @@ def get_web_client_html() -> str:
                 body.appendChild(card);
             });
 
-            summary.textContent = `Trovati ${list.length} nodi con telemetria.`;
+            if (isDirectOnly) {
+                summary.textContent = `🎯 Rilevati ${list.length} ${list.length === 1 ? 'nodo diretto RF' : 'nodi diretti RF'} a 0 salti!`;
+            } else {
+                summary.textContent = `Trovati ${list.length} nodi con telemetria.`;
+            }
         }
 
         function closeScanResultsModal() {
@@ -3790,7 +3904,20 @@ def get_web_client_html() -> str:
                 renderNodes();
                 renderMapMarkers();
             } else if (data.type === "action_result") {
-                if (data.action === "find_nearby_nodes") {
+                if (data.action === "find_direct_nodes" || (data.action === "find_nearby_nodes" && data.direct_only)) {
+                    scanInProgress = false;
+                    if (data.nodes && Array.isArray(data.nodes)) {
+                        data.nodes.forEach(dn => {
+                            const idx = heardNodes.findIndex(h => h.node_name === dn.node_name);
+                            if (idx >= 0) heardNodes[idx] = Object.assign(heardNodes[idx], dn);
+                            else heardNodes.push(dn);
+                        });
+                        renderNodes();
+                        renderMapMarkers();
+                    }
+                    showToast("🎯 Scansione nodi diretti RF completata!", true);
+                    showScanResultsModal(heardNodes, false, true);
+                } else if (data.action === "find_nearby_nodes") {
                     scanInProgress = false;
                     if (data.nodes) {
                         heardNodes = data.nodes;
@@ -3798,7 +3925,7 @@ def get_web_client_html() -> str:
                         renderMapMarkers();
                     }
                     showToast("Scansione nodi completata!", true);
-                    showScanResultsModal(heardNodes, false);
+                    showScanResultsModal(heardNodes, false, false);
                 } else if (data.success) {
                     showToast(`Operazione '${data.action}' completata con successo!`, true);
                 } else {
@@ -4059,12 +4186,64 @@ def get_web_client_html() -> str:
             });
         });
 
-        // Trova Nodi Vicini (Discovery)
+        // Ricerca Nodi Diretti RF (Zero-Hop Active Discovery)
         let scanInProgress = false;
+
+        function triggerDirectScan() {
+            setNodesFilter('direct');
+            showToast("🎯 Scansione nodi diretti RF avviata...", true);
+            showScanResultsModal(null, true, true);
+            scanInProgress = true;
+
+            const triggerDirectSuccess = (nodes) => {
+                if (!scanInProgress) return;
+                scanInProgress = false;
+                if (nodes && Array.isArray(nodes)) {
+                    nodes.forEach(dn => {
+                        const idx = heardNodes.findIndex(h => h.node_name === dn.node_name);
+                        if (idx >= 0) heardNodes[idx] = Object.assign(heardNodes[idx], dn);
+                        else heardNodes.push(dn);
+                    });
+                    renderNodes();
+                    renderMapMarkers();
+                }
+                showScanResultsModal(heardNodes, false, true);
+            };
+
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ action: "find_direct_nodes" }));
+            }
+
+            // Fallback REST call if WebSocket is closed or slow
+            setTimeout(() => {
+                if (scanInProgress) {
+                    fetch("/api/nodes/scan-direct", { method: "POST" })
+                        .then(r => r.json())
+                        .then(res => {
+                            triggerDirectSuccess(res.nodes || heardNodes);
+                        })
+                        .catch(() => {
+                            triggerDirectSuccess(heardNodes);
+                        });
+                }
+            }, 2500);
+        }
+
+        const scanDirectNodesBtn = document.getElementById("scanDirectNodesBtn");
+        if (scanDirectNodesBtn) {
+            scanDirectNodesBtn.addEventListener("click", triggerDirectScan);
+        }
+
+        const findDirectNodesBtn = document.getElementById("findDirectNodesBtn");
+        if (findDirectNodesBtn) {
+            findDirectNodesBtn.addEventListener("click", triggerDirectScan);
+        }
+
+        // Trova Nodi Vicini (Discovery Mesh)
         document.getElementById("findNearbyNodesBtn").addEventListener("click", () => {
-            showToast("🔍 Scansione nodi vicini avviata...", true);
+            showToast("🔍 Scansione rete mesh avviata...", true);
             // 1. Immediately open modal with active scanning animation
-            showScanResultsModal(null, true);
+            showScanResultsModal(null, true, false);
             scanInProgress = true;
 
             const triggerScanSuccess = (nodes) => {

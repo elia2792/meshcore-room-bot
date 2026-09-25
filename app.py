@@ -899,6 +899,27 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+def calc_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> Tuple[int, str]:
+    """Calcola l'angolo di azimut (0-360°) e direzione cardinale bussola tra due coordinate."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dlambda = math.radians(lon2 - lon1)
+    y = math.sin(dlambda) * math.cos(phi2)
+    x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlambda)
+    theta = math.degrees(math.atan2(y, x))
+    theta = (theta + 360) % 360
+    compass_dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    idx = round(theta / 22.5) % 16
+    return round(theta), compass_dirs[idx]
+
+async def execute_direct_nodes_scan() -> List[dict]:
+    """Invia frame di advert zero-hop (senza ripetitori) e sync contatti per rilevare nodi diretti RF."""
+    frame_adv = build_send_self_advert_frame(flood=False)
+    await send_to_heltec(frame_adv)
+    await asyncio.sleep(0.1)
+    frame_contacts = build_get_contacts_frame(0)
+    await send_to_heltec(frame_contacts)
+    return get_recent_heard_nodes(50, direct_only=True)
+
 def build_main_menu_keyboard() -> dict:
     return {
         "inline_keyboard": [
@@ -930,10 +951,11 @@ def build_nodes_keyboard(direct_only: bool = False) -> dict:
         return {
             "inline_keyboard": [
                 [
-                    {"text": "👥 Mostra Tutti i Nodi", "callback_data": "menu_heard"},
+                    {"text": "🎯 Lancia Scansione Zero-Hop", "callback_data": "scan_direct_now"},
                     {"text": "🔄 Aggiorna", "callback_data": "heard_direct"}
                 ],
                 [
+                    {"text": "👥 Mostra Tutti i Nodi", "callback_data": "menu_heard"},
                     {"text": "◀️ Torna al Menu Principale", "callback_data": "back_to_menu"}
                 ]
             ]
@@ -1024,7 +1046,9 @@ def format_node_list_rich(nodes: list, my_lat: float = None, my_lon: float = Non
         n_lon = n.get("lon")
         if n_lat and n_lon and my_lat and my_lon:
             dist = haversine_km(my_lat, my_lon, n_lat, n_lon)
-            dist_str = f"📏 {int(dist * 1000)} m" if dist < 1.0 else f"📏 {dist:.1f} km"
+            deg, cdir = calc_bearing(my_lat, my_lon, n_lat, n_lon)
+            dist_unit = f"{int(dist * 1000)} m" if dist < 1.0 else f"{dist:.1f} km"
+            dist_str = f"📏 {dist_unit} (🧭 {cdir} {deg}°)"
 
         last_time = n.get("last_seen", "")
         last_time_str = last_time[11:16] if last_time and len(last_time) >= 16 else "N/A"
@@ -1375,6 +1399,20 @@ async def websocket_client_endpoint(websocket: WebSocket):
                 sent = await send_to_heltec(frame)
                 await broadcast_telegram(f"📢 <b>Beacon Advert trasmesso via radio in {'flood' if flood else 'zero-hop'}!</b>")
                 await websocket.send_json({"type": "action_result", "action": "send_self_advert", "success": sent})
+            elif action in ("find_direct_nodes", "scan_direct_nodes"):
+                direct_nodes = await execute_direct_nodes_scan()
+                await broadcast_telegram(
+                    f"🎯 <b>Scansione Nodi Diretti RF avviata da Web!</b>\n"
+                    f"• Trasmesso beacon Advert Zero-Hop (senza rimbalzi)\n"
+                    f"• Nodi diretti attivi in memoria: <b>{len(direct_nodes)}</b>"
+                )
+                await websocket.send_json({
+                    "type": "action_result",
+                    "action": "find_direct_nodes",
+                    "success": True,
+                    "direct_only": True,
+                    "nodes": direct_nodes
+                })
             elif action == "find_nearby_nodes":
                 # Send zero-hop advert to make nearby nodes reply, then query contacts table
                 frame_adv = build_send_self_advert_frame(flood=False)
@@ -1382,12 +1420,14 @@ async def websocket_client_endpoint(websocket: WebSocket):
                 await asyncio.sleep(0.1)
                 frame_contacts = build_get_contacts_frame(0)
                 sent_contacts = await send_to_heltec(frame_contacts)
+                direct_req = bool(data.get("direct_only", False))
                 await broadcast_telegram("🔍 <b>Scansione nodi vicini avviata (Advert zero-hop + sync contatti)</b>")
                 await websocket.send_json({
                     "type": "action_result",
                     "action": "find_nearby_nodes",
                     "success": sent_adv or sent_contacts,
-                    "nodes": get_recent_heard_nodes(50)
+                    "direct_only": direct_req,
+                    "nodes": get_recent_heard_nodes(50, direct_only=direct_req)
                 })
             elif action == "reboot":
                 frame = build_reboot_frame()
@@ -1754,7 +1794,7 @@ async def api_manifest():
 @app.get("/sw.js")
 async def api_service_worker():
     sw_code = """
-const CACHE_NAME = 'meshcore-cache-v9';
+const CACHE_NAME = 'meshcore-cache-v10';
 self.addEventListener('install', (e) => {
     self.skipWaiting();
 });
@@ -1773,14 +1813,32 @@ self.addEventListener('fetch', (e) => {
 """
     return Response(content=sw_code, media_type="application/javascript", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
+@app.post("/api/nodes/scan-direct")
+async def api_nodes_scan_direct():
+    direct_nodes = await execute_direct_nodes_scan()
+    return {
+        "success": True,
+        "direct_only": True,
+        "nodes": direct_nodes,
+        "count": len(direct_nodes)
+    }
+
+@app.get("/api/nodes/direct")
+async def api_nodes_direct(limit: int = 50):
+    return get_recent_heard_nodes(limit, direct_only=True)
+
 @app.post("/api/nodes/scan")
-async def api_nodes_scan():
-    frame_adv = build_send_self_advert_frame(flood=False)
-    sent_adv = await send_to_heltec(frame_adv)
-    await asyncio.sleep(0.1)
-    frame_contacts = build_get_contacts_frame(0)
-    sent_contacts = await send_to_heltec(frame_contacts)
-    return {"success": sent_adv or sent_contacts, "nodes": get_recent_heard_nodes(50)}
+async def api_nodes_scan(direct_only: bool = False):
+    if direct_only:
+        nodes = await execute_direct_nodes_scan()
+    else:
+        frame_adv = build_send_self_advert_frame(flood=False)
+        sent_adv = await send_to_heltec(frame_adv)
+        await asyncio.sleep(0.1)
+        frame_contacts = build_get_contacts_frame(0)
+        sent_contacts = await send_to_heltec(frame_contacts)
+        nodes = get_recent_heard_nodes(50, direct_only=False)
+    return {"success": True, "direct_only": direct_only, "nodes": nodes}
 
 @app.websocket("/ws/mesh")
 async def websocket_mesh_endpoint(websocket: WebSocket):
@@ -2298,13 +2356,17 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
         )
 
     # ── Nodi diretti RF (da menu o toggle) ───────────────────────────────────
-    elif data == "heard_direct":
-        await ack()
+    elif data in ("heard_direct", "scan_direct_now"):
+        await ack("Scansione nodi diretti RF..." if data == "scan_direct_now" else None)
+        is_scan = (data == "scan_direct_now")
+        if is_scan:
+            await execute_direct_nodes_scan()
         nodes = get_recent_heard_nodes(50, direct_only=True)
         my_lat = node_info.get("lat")
         my_lon = node_info.get("lon")
+        header = "🎯 <b>SCANSIONE NODI DIRETTI RF EFFETTUATA!</b>\n📡 <i>Beacon Advert Zero-Hop trasmesso senza rimbalzi.</i>\n\n" if is_scan else ""
         await send_telegram(
-            format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
+            header + format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
             chat_id=chat_id,
             reply_markup=build_nodes_keyboard(direct_only=True)
         )
@@ -2615,23 +2677,25 @@ async def telegram_polling_loop():
                             message_thread_id=thread_id
                         )
 
-                    elif text.startswith("/diretti") or text.startswith("/direct"):
+                    elif text.startswith("/diretti") or text.startswith("/direct") or text.startswith("/cerca_diretti") or text.startswith("/scan_diretti"):
                         req_limit = 30
                         parts = text.split()
                         if len(parts) > 1 and parts[1].isdigit():
                             req_limit = min(int(parts[1]), 100)
+                        
+                        await execute_direct_nodes_scan()
                         nodes = get_recent_heard_nodes(req_limit, direct_only=True)
-                        if not nodes:
-                            await send_telegram("ℹ️ Nessun nodo radio ascoltato <b>direttamente (0 salti)</b> di recente.", chat_id=chat_id, message_thread_id=thread_id)
-                        else:
-                            my_lat = node_info.get("lat")
-                            my_lon = node_info.get("lon")
-                            await send_telegram(
-                                format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
-                                chat_id=chat_id,
-                                reply_markup=build_nodes_keyboard(direct_only=True),
-                                message_thread_id=thread_id
-                            )
+                        my_lat = node_info.get("lat")
+                        my_lon = node_info.get("lon")
+                        freq_str = f" su {node_info.get('freq_mhz', 869.618)} MHz"
+                        await send_telegram(
+                            f"🎯 <b>RICERCA NODI DIRETTI RF (0 SALTI)</b>\n"
+                            f"📡 <i>Beacon Advert Zero-Hop trasmesso{freq_str}!</i>\n\n" +
+                            format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
+                            chat_id=chat_id,
+                            reply_markup=build_nodes_keyboard(direct_only=True),
+                            message_thread_id=thread_id
+                        )
 
                     elif text.startswith("/nodi") or text.startswith("/heard"):
                         req_limit = 30
