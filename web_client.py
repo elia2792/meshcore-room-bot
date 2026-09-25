@@ -2876,7 +2876,7 @@ def get_web_client_html() -> str:
         };
 
         window.inspectAndRepairStorage = async function() {
-            let info = "📊 Diagnostica Memoria MeshCore:\n\n";
+            let info = `📊 Diagnostica Memoria MeshCore:\n\n`;
             info += `• Messaggi visualizzati in chat: ${messages.length}\n`;
             
             // Check IndexedDB

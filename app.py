@@ -1609,7 +1609,7 @@ async def api_manifest():
 @app.get("/sw.js")
 async def api_service_worker():
     sw_code = """
-const CACHE_NAME = 'meshcore-cache-v6';
+const CACHE_NAME = 'meshcore-cache-v7';
 self.addEventListener('install', (e) => {
     self.skipWaiting();
 });
