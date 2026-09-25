@@ -559,9 +559,11 @@ def get_web_client_html() -> str:
             letter-spacing: 0.2px;
         }
 
-        .ack-indicator.pending {
+        .ack-indicator.pending,
+        .ack-indicator.sent {
             color: #94a3b8;
-            background: rgba(148, 163, 184, 0.1);
+            background: rgba(148, 163, 184, 0.12);
+            border: 1px solid rgba(148, 163, 184, 0.25);
         }
 
         .ack-indicator.air {
@@ -2023,6 +2025,11 @@ def get_web_client_html() -> str:
                     String(d.getMinutes()).padStart(2, '0') + ":" +
                     String(d.getSeconds()).padStart(2, '0');
             }
+            if (m.ack_status === "confirmed" && (!m.ack_nodes_count || m.ack_nodes_count < 1)) {
+                m.ack_nodes_count = 1;
+            } else if (m.ack_nodes_count === undefined || m.ack_nodes_count === null) {
+                m.ack_nodes_count = 0;
+            }
             return m;
         }
 
@@ -3332,20 +3339,22 @@ def get_web_client_html() -> str:
 
                 if (isOut) {
                     const status = m.ack_status || (m.sent_to_radio ? "sent_to_radio" : "pending");
-                    if (status === "confirmed") {
+                    const nodeCount = (typeof m.ack_nodes_count === "number" && m.ack_nodes_count > 0)
+                        ? m.ack_nodes_count
+                        : (status === "confirmed" ? 1 : 0);
+
+                    if (nodeCount > 0 || status === "confirmed") {
+                        const count = Math.max(1, nodeCount);
+                        const nodeLabel = count === 1 ? "1 nodo" : `${count} nodi`;
                         const rtt = m.rtt_ms ? ` • ${m.rtt_ms}ms` : "";
                         let hopInfo = "";
                         if (m.hops !== undefined && m.hops !== null) {
                             const hops = decodeHops(m.hops);
                             hopInfo = hops === 0 ? " • 🎯 Diretto RF" : ` • 🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                         }
-                        details += `<span class="ack-indicator confirmed">✓✓ RECAPITATO${hopInfo}${rtt}</span>`;
-                    } else if (status === "air" || status === "transmitted") {
-                        details += `<span class="ack-indicator air">✓ Trasmesso in etere LoRa</span>`;
-                    } else if (status === "sent_to_radio") {
-                        details += `<span class="ack-indicator pending">✓ Inviato alla radio</span>`;
+                        details += `<span class="ack-indicator confirmed">✓✓ Ricevuto da ${nodeLabel}${hopInfo}${rtt}</span>`;
                     } else {
-                        details += `<span class="ack-indicator pending">⏳ In trasmissione...</span>`;
+                        details += `<span class="ack-indicator sent">✓ Inviato</span>`;
                     }
                 }
 
@@ -3638,8 +3647,11 @@ def get_web_client_html() -> str:
             } else if (data.type === "message_in_flight") {
                 // Sent to radio, in the air
                 for (let i = messages.length - 1; i >= 0; i--) {
-                    if ((messages[i].source === "Web Client" || messages[i].source === "Telegram") && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio" || messages[i].ack_status === "pending")) {
+                    if ((messages[i].source === "Web Client" || messages[i].source === "Telegram" || messages[i].source === "Web API") && (!messages[i].ack_status || messages[i].ack_status === "sent_to_radio" || messages[i].ack_status === "pending")) {
                         messages[i].ack_status = data.status || "transmitted";
+                        if (messages[i].ack_nodes_count === undefined || messages[i].ack_nodes_count === null) {
+                            messages[i].ack_nodes_count = 0;
+                        }
                         break;
                     }
                 }
@@ -3647,23 +3659,35 @@ def get_web_client_html() -> str:
                 renderMessages();
             } else if (data.type === "message_ack") {
                 // Confirmed delivery ACK by remote node
+                let target = null;
                 for (let i = messages.length - 1; i >= 0; i--) {
                     if (messages[i].source === "Web Client" || messages[i].source === "Web API" || messages[i].source === "Telegram") {
-                        messages[i].ack_status = "confirmed";
-                        messages[i].rtt_ms = data.round_trip_ms;
-                        if (data.hops !== undefined && data.hops !== null) {
-                            messages[i].hops = data.hops;
+                        if (data.msg_id && messages[i].id && messages[i].id === data.msg_id) {
+                            target = messages[i];
+                            break;
+                        } else if (!target) {
+                            target = messages[i];
                         }
-                        break;
+                    }
+                }
+                if (target) {
+                    target.ack_status = "confirmed";
+                    const currentCount = target.ack_nodes_count || 0;
+                    target.ack_nodes_count = data.ack_nodes_count ? Math.max(currentCount + 1, data.ack_nodes_count) : (currentCount + 1);
+                    target.rtt_ms = data.round_trip_ms;
+                    if (data.hops !== undefined && data.hops !== null) {
+                        target.hops = data.hops;
                     }
                 }
                 saveMessagesToStorage();
                 renderMessages();
                 playChime("ack");
+                const count = target ? (target.ack_nodes_count || 1) : 1;
+                const nodeLabel = count === 1 ? "1 nodo" : `${count} nodi`;
                 const hops = (data.hops !== undefined && data.hops !== null) ? decodeHops(data.hops) : null;
                 const hopsStr = data.hops_str ? ` (${data.hops_str})` : (hops !== null ? (hops === 0 ? " (🎯 Diretto RF)" : ` (🔀 ${hops} salti)`) : "");
                 const rttStr = data.round_trip_ms ? ` (${data.round_trip_ms} ms)` : "";
-                showToast(`🟢 RECAPITATO! Confermato da nodo mesh${hopsStr}${rttStr}`, true);
+                showToast(`🟢 Ricevuto da ${nodeLabel}${hopsStr}${rttStr}`, true);
             } else if (data.type === "radar_alert") {
                 playChime("radar");
                 const nName = data.node_name || "Nodo Diretto";
@@ -3744,8 +3768,9 @@ def get_web_client_html() -> str:
                 epoch_ms: now.getTime(),
                 snr: null,
                 hops: 0,
-                sent_to_radio: false,
-                ack_status: "pending"
+                sent_to_radio: true,
+                ack_status: "sent_to_radio",
+                ack_nodes_count: 0
             };
             messages.push(optimisticMsg);
             saveMessagesToStorage();
