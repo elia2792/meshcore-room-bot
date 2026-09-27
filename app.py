@@ -87,12 +87,12 @@ node_info: Dict[str, Any] = {
     "sf": 8,
     "cr": 8,
     "tx_power": 20,
-    "lat": None,
-    "lon": None,
+    "lat": 45.5448,
+    "lon": 8.8147,
     "altitude_m": 195,
     "max_channels": 40,
     "regional_scope": "it",
-    "beacon_interval_min": 0,
+    "beacon_interval_min": 15,
     "beacon_flood": 1,
     "node_role": "client",
     "preamble_len": 8,
@@ -806,10 +806,16 @@ def build_set_advert_name_frame(name: str) -> bytes:
     payload = bytes([8]) + name_bytes
     return b"<" + struct.pack("<H", len(payload)) + payload
 
-def build_set_advert_latlon_frame(lat: float, lon: float) -> bytes:
+def build_set_advert_latlon_frame(lat: float, lon: float, alt: int = 195) -> bytes:
     lat_i = int(round(lat * 1000000.0))
     lon_i = int(round(lon * 1000000.0))
-    payload = bytes([14]) + struct.pack("<i", lat_i) + struct.pack("<i", lon_i)
+    alt_i = int(alt)
+    payload = bytes([14]) + struct.pack("<i", lat_i) + struct.pack("<i", lon_i) + struct.pack("<i", alt_i)
+    return b"<" + struct.pack("<H", len(payload)) + payload
+
+def build_set_other_params_frame(advert_loc_policy: int = 1) -> bytes:
+    # CMD_SET_OTHER_PARAMS = 38: manual_add=0, telemetry_modes=0x0A, advert_loc_policy=1 (ADVERT_LOC_SHARE)
+    payload = bytes([38, 0, 0x0A, int(advert_loc_policy), 0])
     return b"<" + struct.pack("<H", len(payload)) + payload
 
 def build_set_channel_frame(channel_idx: int, channel_name: str, psk_bytes: bytes = None) -> bytes:
@@ -856,13 +862,28 @@ async def query_all_heltec_channels():
     # Send regional scope configuration if supported by Heltec CLI/firmware
     scope = node_info.get("regional_scope", "it")
     if scope:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.05)
         try:
             await send_to_heltec(f"region default {scope}\r\n".encode("utf-8"))
             await asyncio.sleep(0.05)
             await send_to_heltec(b"region save\r\n")
         except Exception:
             pass
+
+    # Configure GPS coordinates and Advert Location Policy so the node appears on the MeshCore livemap
+    lat = node_info.get("lat") or 45.5448
+    lon = node_info.get("lon") or 8.8147
+    alt = node_info.get("altitude_m", 195)
+    name = node_info.get("name", "Buscate")
+    await asyncio.sleep(0.05)
+    await send_to_heltec(build_set_advert_name_frame(name))
+    await asyncio.sleep(0.05)
+    await send_to_heltec(build_set_advert_latlon_frame(lat, lon, alt))
+    await asyncio.sleep(0.05)
+    await send_to_heltec(build_set_other_params_frame(1))  # ADVERT_LOC_SHARE = 1
+    await asyncio.sleep(0.05)
+    await send_to_heltec(build_send_self_advert_frame(flood=True))
+    print(f"[HeltecConnect] Inviato Advert Beacon per {name} con coordinate ({lat}, {lon}) alla rete MeshCore!")
 
 def resolve_channel(target_str: str) -> Optional[int]:
     clean = target_str.strip().lstrip("#")
@@ -1133,15 +1154,23 @@ async def keep_alive_loop():
 
 async def periodic_beacon_loop():
     """Invia periodicamente un annuncio Beacon Advert se beacon_interval_min > 0."""
-    await asyncio.sleep(60)
+    await asyncio.sleep(45)
     while True:
         try:
-            interval = int(node_info.get("beacon_interval_min", 0))
+            interval = int(node_info.get("beacon_interval_min", 15))
             if interval > 0 and active_heltec_ws:
                 flood = int(node_info.get("beacon_flood", 1)) == 1
+                lat = node_info.get("lat") or 45.5448
+                lon = node_info.get("lon") or 8.8147
+                alt = node_info.get("altitude_m", 195)
+                # Assicura coordinate e policy di condivisione posizione prima del beacon
+                await send_to_heltec(build_set_advert_latlon_frame(lat, lon, alt))
+                await asyncio.sleep(0.05)
+                await send_to_heltec(build_set_other_params_frame(1))
+                await asyncio.sleep(0.05)
                 frame = build_send_self_advert_frame(flood=flood)
                 await send_to_heltec(frame)
-                print(f"[BeaconLoop] Auto beacon inviato (intervallo={interval}m, flood={flood})")
+                print(f"[BeaconLoop] Auto beacon inviato con coordinate {lat},{lon} (intervallo={interval}m, flood={flood})")
                 await asyncio.sleep(interval * 60)
             else:
                 await asyncio.sleep(30)
