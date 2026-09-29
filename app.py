@@ -52,6 +52,7 @@ ADMIN_LORA_NODES = [n.strip() for n in os.getenv("ADMIN_LORA_NODES", "Admin").sp
 ADMIN_LORA_PIN = os.getenv("ADMIN_LORA_PIN", "").strip()
 CHANNEL_RATE_LIMIT_MAX = int(os.getenv("CHANNEL_RATE_LIMIT_MAX", "5"))
 CHANNEL_RATE_LIMIT_WINDOW = int(os.getenv("CHANNEL_RATE_LIMIT_WINDOW", "300"))
+AUTO_RETRY_ENABLED = os.getenv("AUTO_RETRY_ENABLED", "false").lower() in ("true", "1", "yes")
 channel_reply_history: Dict[int, List[float]] = {}
 
 app = FastAPI(title="MeshCore Telegram Room Bridge")
@@ -493,7 +494,6 @@ async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, con
             sent = await send_to_heltec(frame)
             if sent:
                 b_id = save_message("Auto-Responder", f"Admin {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
-                asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
                 await broadcast_telegram(f"🛡️ <b>[Admin Radio]</b> Comando <code>{clean_text}</code> da <b>{sender_name}</b>:\n<i>{resp_text}</i>", lora_channel_idx=ch_idx)
             return
 
@@ -541,7 +541,6 @@ async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, con
         sent = await send_to_heltec(frame)
         if sent:
             b_id = save_message("Auto-Responder", f"Meteo {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
-            asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
             await broadcast_telegram(f"🌤️ <b>[Meteo Radio LoRa]</b> Richiesto da <b>{sender_name}</b>:\n<i>{resp_text}</i>", lora_channel_idx=ch_idx)
             await broadcast_to_browsers({
                 "type": "new_message",
@@ -575,7 +574,6 @@ async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, con
             sent = await send_to_heltec(frame)
             if sent:
                 b_id = save_message("Mailbox Bot", f"Posta {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
-                asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
                 await broadcast_telegram(f"📬 <b>[Mailbox Nuovo Messaggio]</b> Da <b>{sender_name}</b> per <b>@{t_node}</b>:\n\"{t_content}\"", lora_channel_idx=ch_idx)
             await broadcast_to_browsers({"type": "mailbox_updated"})
         except Exception as e:
@@ -649,7 +647,6 @@ async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, con
     sent = await send_to_heltec(frame)
     if sent:
         b_id = save_message("Auto-Responder", f"Echo {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
-        asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
         await broadcast_telegram(
             f"🤖 <b>[Auto-Responder Radio]</b>\n"
             f"Comando <code>{content_text}</code> da <b>{sender_name}</b>\n"
@@ -890,51 +887,93 @@ def get_recent_messages(limit: int = 250, channel: Optional[str] = None) -> List
         return []
 
 def check_and_process_mention_reply(sender_node: str, channel_name: str, content_text: str, snr: Optional[float], hops: Optional[int]) -> Optional[dict]:
-    """Se un messaggio LoRa in arrivo risponde o menziona la nostra stazione, trova il nostro ultimo messaggio inviato e lo conferma."""
-    my_name = node_info.get("name", "Buscate 🇮🇹").strip()
+    """
+    Riconosce se un messaggio LoRa in arrivo risponde o conferma la ricezione di un nostro messaggio precedente:
+    1. Se il mittente e' il target esplicito a cui avevamo scritto (es: avevamo scritto a @[IU1IPB-1] e IU1IPB-1 trasmette sul canale).
+    2. Se il messaggio contiene menzione esplicita al nostro nodo o mittente (@[Buscate], @Buscate, Buscate, @Elia, @[Web-Operatore]).
+    3. Se contiene formati di ACK standard MeshCore ('ack @[...]', 'Test OK', 'ricevuto').
+    4. Se c'e' attivita' di risposta recente sullo stesso canale.
+    """
+    if not sender_node or not content_text:
+        return None
+    my_name = node_info.get("name", "Buscate").strip()
     clean_name = re.sub(r'[^\w\s-]', '', my_name).strip().lower()
     low = content_text.lower()
+    s_low = sender_node.strip().lower()
 
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        # Cerca l'ultimo messaggio inviato da noi su questo canale
+
+        # Cerca messaggi recenti su questo canale (o generali)
         cur.execute(
-            "SELECT id, sender, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') AND channel = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, sender, content, ack_status, ack_nodes_count, ack_nodes, hops FROM messages "
+            "WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Auto-Responder', 'Mailbox Bot') "
+            "AND channel = ? ORDER BY id DESC LIMIT 5",
             (channel_name,)
         )
-        row = cur.fetchone()
-        if not row:
+        recent_rows = cur.fetchall()
+        if not recent_rows:
             cur.execute(
-                "SELECT id, sender, ack_status, ack_nodes_count, ack_nodes, hops FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram') ORDER BY id DESC LIMIT 1"
+                "SELECT id, sender, content, ack_status, ack_nodes_count, ack_nodes, hops FROM messages "
+                "WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Auto-Responder', 'Mailbox Bot') "
+                "ORDER BY id DESC LIMIT 5"
             )
-            row = cur.fetchone()
+            recent_rows = cur.fetchall()
 
-        if not row:
+        if not recent_rows:
             conn.close()
             return None
 
-        our_sender = (row["sender"] or "").strip().lower()
-        clean_sender = re.sub(r'[^\w\s-]', '', our_sender).strip()
+        matched_row = None
+        for row in recent_rows:
+            our_content = (row["content"] or "").strip()
+            our_sender = (row["sender"] or "").strip().lower()
+            clean_sender = re.sub(r'[^\w\s-]', '', our_sender).strip()
 
-        # Riconosce formati di risposta o menzione a Buscate, al mittente del messaggio, o Web-Operatore
-        is_reply = False
-        if f"@[{my_name.lower()}]" in low or f"@{my_name.lower()}" in low:
-            is_reply = True
-        elif clean_name and (f"@[{clean_name}]" in low or f"@{clean_name}" in low or clean_name in low):
-            is_reply = True
-        elif "@[web-operatore]" in low or "@web-operatore" in low or "web-operatore" in low:
-            is_reply = True
-        elif clean_sender and len(clean_sender) >= 3 and (f"@[{clean_sender}]" in low or f"@{clean_sender}" in low or f" {clean_sender} " in f" {low} "):
-            is_reply = True
+            target_match = re.search(r'@\[([^\]]+)\]', our_content)
+            if not target_match:
+                target_match = re.search(r'@(\S+)', our_content)
+            target_name = target_match.group(1).strip().lower() if target_match else None
 
-        if not is_reply:
+            is_reply = False
+
+            # 1. Il mittente del pacchetto in arrivo e' il target a cui avevamo scritto
+            if target_name and (s_low == target_name or target_name in s_low or s_low in target_name):
+                is_reply = True
+            # 2. Menzione esplicita al nostro nodo
+            elif f"@[{my_name.lower()}]" in low or f"@{my_name.lower()}" in low or f"[{my_name.lower()}]:" in low:
+                is_reply = True
+            elif clean_name and (f"@[{clean_name}]" in low or f"@{clean_name}" in low or clean_name in low):
+                is_reply = True
+            # 3. Menzione a Telegram / Web-Operatore / Admin
+            elif "@[web-operatore]" in low or "@web-operatore" in low or "web-operatore" in low:
+                is_reply = True
+            elif clean_sender and len(clean_sender) >= 3 and (f"@[{clean_sender}]" in low or f"@{clean_sender}" in low or f" {clean_sender} " in f" {low} "):
+                is_reply = True
+            elif any(adm.lower() in low for adm in ADMIN_LORA_NODES if len(adm) >= 3):
+                is_reply = True
+            # 4. Pattern di ACK mesh
+            elif re.search(r'\back\b.*' + re.escape(clean_name), low) or re.search(r'\btest ok\b.*' + re.escape(clean_name), low):
+                is_reply = True
+
+            if is_reply:
+                matched_row = row
+                break
+
+        # Se non c'e' menzione esplicita ma qualcuno risponde sullo stesso canale dopo il nostro messaggio non ancora confermato:
+        if not matched_row and recent_rows:
+            top_row = recent_rows[0]
+            if top_row["ack_status"] in ("sent_to_radio", "transmitted", "pending"):
+                matched_row = top_row
+
+        if not matched_row:
             conn.close()
             return None
 
-        msg_id = row["id"]
-        raw_nodes = row["ack_nodes"] or ""
+        msg_id = matched_row["id"]
+        raw_nodes = matched_row["ack_nodes"] or ""
         nodes = []
         if raw_nodes:
             try:
@@ -944,7 +983,7 @@ def check_and_process_mention_reply(sender_node: str, channel_name: str, content
         if sender_node and sender_node not in nodes:
             nodes.append(sender_node)
         new_count = max(1, len(nodes))
-        dec_hops = decode_meshcore_hops(hops) if hops is not None else row["hops"]
+        dec_hops = decode_meshcore_hops(hops) if hops is not None else matched_row["hops"]
         nodes_json = json.dumps(nodes)
 
         cur.execute(
@@ -961,10 +1000,9 @@ def check_and_process_mention_reply(sender_node: str, channel_name: str, content
             "hops": dec_hops,
             "channel": channel_name
         }
-        conn.close()
     except Exception as e:
-        print("Error in check_and_process_mention_reply:", e)
-    return None
+        print("check_and_process_mention_reply error:", e)
+        return None
 
 def retro_reconcile_acks_in_db():
     """Analizza all'avvio i messaggi esistenti nel DB per associare risposte e menzioni ai messaggi inviati."""
@@ -1248,7 +1286,6 @@ async def check_and_deliver_mailbox(sender_name: str, ch_idx: int = 0, ch_name: 
             sent = await send_to_heltec(frame)
             if sent:
                 b_id = save_message("Mailbox Bot", f"Posta {my_name}", ch_name, delivery_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
-                asyncio.create_task(auto_retry_message(b_id, target_ch, delivery_text, max_retries=5, interval=45, target_node=sender_name))
                 await broadcast_telegram(
                     f"📬 <b>[Mailbox Delivery LoRa]</b>\nRecapitato via radio a <b>@{sender_name}</b> (da @{p_sender}):\n<i>\"{p_content}\"</i>",
                     lora_channel_idx=target_ch
@@ -1992,7 +2029,8 @@ async def websocket_client_endpoint(websocket: WebSocket):
                     frame = build_channel_send_frame(ch_idx, lora_text)
                     sent = await send_to_heltec(frame)
                     if sent:
-                        asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=5, interval=45))
+                        if AUTO_RETRY_ENABLED:
+                            asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=3, interval=60))
 
                     if reply_to_sender:
                         tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n↩️ <i>Risposta a @{reply_to_sender}</i>\n{text}"
@@ -2422,7 +2460,8 @@ async def api_send(request: Request):
     frame = build_channel_send_frame(ch_idx, lora_text)
     sent = await send_to_heltec(frame)
     if sent:
-        asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=5, interval=45))
+        if AUTO_RETRY_ENABLED:
+            asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=3, interval=60))
 
     tg_msg = f"🌐 <b>[Web API ➔ Canale {ch_idx}: {ch_name}]</b>\n{text}"
     await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
@@ -3946,7 +3985,8 @@ async def telegram_polling_loop():
                                 frame = build_channel_send_frame(resolved, f"[{sender_name}]: {content}")
                                 sent = await send_to_heltec(frame)
                                 if sent:
-                                    asyncio.create_task(auto_retry_message(msg_id, resolved, f"[{sender_name}]: {content}", max_retries=5, interval=45))
+                                    if AUTO_RETRY_ENABLED:
+                                        asyncio.create_task(auto_retry_message(msg_id, resolved, f"[{sender_name}]: {content}", max_retries=3, interval=60))
                                 await broadcast_to_browsers({
                                     "type": "new_message",
                                     "id": msg_id,
@@ -4141,7 +4181,8 @@ async def telegram_polling_loop():
                         frame = build_channel_send_frame(target_ch_idx, f"[{sender_name}]: {payload_text}")
                         sent = await send_to_heltec(frame)
                         if sent:
-                            asyncio.create_task(auto_retry_message(msg_id, target_ch_idx, f"[{sender_name}]: {payload_text}", max_retries=5, interval=45))
+                            if AUTO_RETRY_ENABLED:
+                                asyncio.create_task(auto_retry_message(msg_id, target_ch_idx, f"[{sender_name}]: {payload_text}", max_retries=3, interval=60))
                         await broadcast_to_browsers({
                             "type": "new_message",
                             "id": msg_id,

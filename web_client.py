@@ -2968,12 +2968,21 @@ def get_web_client_html() -> str:
                                 const prevSender = (prev.sender || "").trim().toLowerCase();
                                 const cleanSender = prevSender.replace(/[^\w\s-]/g, '').trim();
 
-                                const isReply = low.includes(`@[${myName}]`) || low.includes(`@{${myName}}`) ||
-                                                low.includes(`@[${cleanName}]`) || low.includes(`@${cleanName}`) ||
-                                                low.includes("@[buscate") || low.includes("@buscate") ||
-                                                low.includes("buscate") || low.includes("@[web-operatore]") ||
-                                                quoteLow.includes("buscate") || quoteLow.includes(cleanName) ||
-                                                (cleanSender.length >= 3 && (low.includes(`@[${cleanSender}]`) || low.includes(`@${cleanSender}`) || quoteLow.includes(cleanSender)));
+                                const senderLow = (msg.sender || "").toLowerCase().trim();
+                                const targetMatch = (prev.content || "").match(/@\[?([^\]\s:,]+)\]?/);
+                                const targetNode = targetMatch ? targetMatch[1].toLowerCase().trim() : null;
+
+                                let isReply = false;
+                                if (targetNode && senderLow && (senderLow === targetNode || senderLow.includes(targetNode) || targetNode.includes(senderLow))) {
+                                    isReply = true;
+                                } else if (low.includes(`@[${myName}]`) || low.includes(`@{${myName}}`) ||
+                                           low.includes(`@[${cleanName}]`) || low.includes(`@${cleanName}`) ||
+                                           low.includes("@[buscate") || low.includes("@buscate") ||
+                                           low.includes("buscate") || low.includes("@[elia") || low.includes("@elia") ||
+                                           low.includes("@[web-operatore]") || quoteLow.includes("buscate") || quoteLow.includes(cleanName) ||
+                                           (cleanSender.length >= 3 && (low.includes(`@[${cleanSender}]`) || low.includes(`@${cleanSender}`) || quoteLow.includes(cleanSender)))) {
+                                    isReply = true;
+                                }
 
                                 if (isReply) {
                                     const senderNode = msg.sender || "Nodo Radio";
