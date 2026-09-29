@@ -4,4 +4,5 @@ websockets>=11.0.0
 httpx>=0.24.0
 aiofiles>=23.0.0
 tzdata>=2024.1
-
+pyserial>=3.5
+pyserial-asyncio>=0.6

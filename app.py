@@ -1,3 +1,4 @@
+import json
 import asyncio
 import os
 import sys
@@ -38,8 +39,20 @@ from web_client import get_web_client_html
 
 # Configuration
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DB_PATH = os.getenv("DB_PATH", "room_messages.db")
+HELTEC_SERIAL_PORT = os.getenv("HELTEC_SERIAL_PORT", "/dev/ttyUSB0")
+HELTEC_TCP_HOST = os.getenv("HELTEC_TCP_HOST", "")
+HELTEC_TCP_PORT = int(os.getenv("HELTEC_TCP_PORT", "5000"))
+WEB_APP_URL = os.getenv("WEB_APP_URL", "http://localhost:8000/app")
+
+# Admin Role via Radio & Channel Rate Limiting
+BOT_START_TIME = time.time()
+ADMIN_LORA_NODES = [n.strip() for n in os.getenv("ADMIN_LORA_NODES", "Admin").split(",") if n.strip()]
+ADMIN_LORA_PIN = os.getenv("ADMIN_LORA_PIN", "").strip()
+CHANNEL_RATE_LIMIT_MAX = int(os.getenv("CHANNEL_RATE_LIMIT_MAX", "5"))
+CHANNEL_RATE_LIMIT_WINDOW = int(os.getenv("CHANNEL_RATE_LIMIT_WINDOW", "300"))
+channel_reply_history: Dict[int, List[float]] = {}
 
 app = FastAPI(title="MeshCore Telegram Room Bridge")
 
@@ -197,6 +210,25 @@ def init_db():
             value TEXT
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mailbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_node TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            channel_idx INTEGER DEFAULT 0,
+            content TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            delivered_at DATETIME
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS favorite_nodes (
+            node_name TEXT PRIMARY KEY,
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     cursor.execute("INSERT OR IGNORE INTO node_settings (key, value) VALUES ('regional_scope', 'it')")
 
     # Sanitize existing distorted hop counts from earlier MeshCore path_len bug
@@ -236,6 +268,97 @@ def set_node_setting(key: str, value: str):
 AUTO_RESPONDER_ENABLED = True
 auto_responder_cooldown = {}
 direct_node_alert_cache = set()
+
+def is_bot_sender(sender_name: str) -> bool:
+    """Rileva se il mittente e un bot, un repeater automatico o un server radio per evitare loop."""
+    if not sender_name:
+        return True
+    nl = sender_name.lower().strip()
+    my_nl = node_info.get("name", "Buscate").lower()
+    if nl in (my_nl, "web-operatore", "telegram", f"echo {my_nl}", "echo buscate", "nodo radio", "unknown", "utente"):
+        return True
+    if "🤖" in nl:
+        return True
+    bot_patterns = [
+        r'\bbot\b', r'bot$', r'^bot', r'_bot', r'-bot',
+        r'\brepeater\b', r'\bripetitore\b',
+        r'\broom\b', r'\bserver\b',
+        r'\becho\b', r'\bbeacon\b',
+        r'\brelay\b', r'\bgateway\b',
+        r'\btestbot\b', r'^wx[\s\-_]', r'[\s\-_]wx$'
+    ]
+    for pat in bot_patterns:
+        if re.search(pat, nl):
+            return True
+    return False
+
+def is_bot_content(text_lower: str, my_name: str) -> bool:
+    """Rileva se il messaggio contiene frasi tipiche di risposte automatiche per evitare loop RF."""
+    phrases = (
+        "[bot]", "test ok", "pong!", "pong", "ack da", f"da {my_name.lower()}",
+        "hops:", "snr:", "rssi:", "🤖", "ricevuto da", "stazione heltec",
+        "percorso:", "previsioni meteo", "messaggio registrato per",
+        "tuo snr", "comandi disponibili", "uptime:"
+    )
+    return any(p in text_lower for p in phrases)
+
+def is_admin_sender(sender_name: str, pin_provided: Optional[str] = None) -> bool:
+    """Verifica autenticazione amministratore via radio (PIN o whitelist nodi o note DB)."""
+    if not sender_name:
+        return False
+    if pin_provided and ADMIN_LORA_PIN and pin_provided.strip().lower() == ADMIN_LORA_PIN.lower():
+        return True
+    s_low = sender_name.strip().lower()
+    for adm in ADMIN_LORA_NODES:
+        if adm.lower() == s_low:
+            return True
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT notes FROM favorite_nodes WHERE LOWER(node_name) = ?", (s_low,))
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0] and "admin" in row[0].lower():
+            return True
+    except Exception:
+        pass
+    return False
+
+def check_and_record_channel_rate_limit(ch_idx: int) -> bool:
+    """
+    Verifica se il canale ha superato il limite di risposte (default: max 5 in 300s).
+    Ritorna True se consentito (e registra timestamp), False se superato (Silent Rejection).
+    """
+    now = time.time()
+    ts_list = [ts for ts in channel_reply_history.get(ch_idx, []) if now - ts < CHANNEL_RATE_LIMIT_WINDOW]
+    if len(ts_list) >= CHANNEL_RATE_LIMIT_MAX:
+        print(f"[Silent Rejection] Canale {ch_idx} rate limit superato ({len(ts_list)}/{CHANNEL_RATE_LIMIT_MAX} in {CHANNEL_RATE_LIMIT_WINDOW}s). Risposta ignorata.")
+        channel_reply_history[ch_idx] = ts_list
+        return False
+    ts_list.append(now)
+    channel_reply_history[ch_idx] = ts_list
+    return True
+
+def get_sender_distance_km(sender_name: str) -> Optional[float]:
+    """Cerca le coordinate GPS del mittente nel database e calcola la distanza da Buscate."""
+    if not sender_name:
+        return None
+    my_lat = node_info.get("lat") or 45.5448
+    my_lon = node_info.get("lon") or 8.8147
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT lat, lon FROM heard_nodes WHERE node_name = ? AND lat IS NOT NULL AND lon IS NOT NULL", (sender_name,))
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute("SELECT lat, lon FROM node_gps_history WHERE node_name = ? AND lat IS NOT NULL AND lon IS NOT NULL ORDER BY id DESC LIMIT 1", (sender_name,))
+            row = cursor.fetchone()
+        conn.close()
+        if row and row[0] is not None and row[1] is not None:
+            return haversine_km(my_lat, my_lon, row[0], row[1])
+    except Exception as e:
+        print("get_sender_distance_km error:", e)
+    return None
 
 def record_node_gps(node_name: str, lat: float, lon: float):
     if not node_name or lat is None or lon is None:
@@ -294,48 +417,239 @@ async def handle_auto_responder(sender_name: str, ch_idx: int, ch_name: str, con
     if not AUTO_RESPONDER_ENABLED or not active_heltec_ws:
         return
     my_name = node_info.get("name", "Buscate")
-    if sender_name in (my_name, "Web-Operatore", "Telegram", f"Echo {my_name}", "Echo Buscate", "Nodo Radio", "Unknown"):
-        return
-    if f"da {my_name}" in content_text or "Ack da" in content_text:
+
+    # Anti-loop #5: filtro avanzato per nodi bot, ripetitori o server
+    if is_bot_sender(sender_name):
         return
 
     text_lower = content_text.lower().strip()
-    triggers = ("!ping", "!test", "!echo", "!snr", "!help", "!chi_sei", "!stazione", "!status")
+    # Anti-loop #5: non rispondere a messaggi contenenti risposte automatiche
+    if is_bot_content(text_lower, my_name):
+        return
+
+    # Pulisce eventuale menzione iniziale es. @[Buscate] o @Buscate
+    clean_text = re.sub(r'^@\[?[^\]]+\]?\s*[:,-]?\s*', '', text_lower).strip()
+    clean_word = clean_text.rstrip("?!.,; ").strip()
+
+    # ── Ruolo Admin via Radio (#4: Ruolo Admin & #3: Silent Rejection) ──────────
+    is_admin_cmd = False
+    admin_action = None
+    admin_pin = None
+
+    if clean_text.startswith("!admin") or clean_text.startswith("admin"):
+        parts = clean_text.split()
+        if len(parts) >= 2:
+            admin_action = parts[1].lower()
+            admin_pin = parts[2] if len(parts) > 2 else None
+            is_admin_cmd = True
+    elif clean_text.startswith("!reboot") or clean_text.startswith("reboot"):
+        parts = clean_text.split()
+        admin_action = "reboot"
+        admin_pin = parts[1] if len(parts) > 1 else None
+        is_admin_cmd = True
+    elif clean_text.startswith("!advert") or clean_text.startswith("advert"):
+        parts = clean_text.split()
+        admin_action = "advert"
+        admin_pin = parts[1] if len(parts) > 1 else None
+        is_admin_cmd = True
+    elif clean_text.startswith("!stats") or clean_text == "stats":
+        parts = clean_text.split()
+        admin_action = "stats"
+        admin_pin = parts[1] if len(parts) > 1 else None
+        is_admin_cmd = True
+
+    if is_admin_cmd:
+        if not is_admin_sender(sender_name, admin_pin):
+            # Silent Rejection: nessun pacchetto radio inviato per tentativi non autorizzati
+            print(f"[Silent Rejection] Tentativo comando admin non autorizzato da '{sender_name}' (cmd: {clean_text}).")
+            return
+
+        if not check_and_record_channel_rate_limit(ch_idx):
+            return
+
+        if admin_action in ("stats", "stato"):
+            up_secs = int(time.time() - BOT_START_TIME)
+            h = up_secs // 3600
+            m = (up_secs % 3600) // 60
+            s = up_secs % 60
+            up_str = f"{h}h {m}m" if h > 0 else f"{m}m {s}s"
+            rx = stats.get("packets_rx", 0)
+            tx = stats.get("packets_tx", 0)
+            heard_cnt = 0
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT COUNT(*) FROM heard_nodes")
+                row = c.fetchone()
+                if row:
+                    heard_cnt = row[0]
+                conn.close()
+            except Exception:
+                pass
+            rate_used = len(channel_reply_history.get(ch_idx, []))
+            resp_text = f"@[{sender_name}]: 🛡️ Admin Stats: Up {up_str} • RX:{rx} TX:{tx} • Nodi:{heard_cnt} • Ch{ch_idx} rate:{rate_used}/{CHANNEL_RATE_LIMIT_MAX}"
+            await asyncio.sleep(0.5)
+            frame = build_channel_send_frame(ch_idx, resp_text)
+            sent = await send_to_heltec(frame)
+            if sent:
+                b_id = save_message("Auto-Responder", f"Admin {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+                asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
+                await broadcast_telegram(f"🛡️ <b>[Admin Radio]</b> Comando <code>{clean_text}</code> da <b>{sender_name}</b>:\n<i>{resp_text}</i>", lora_channel_idx=ch_idx)
+            return
+
+        elif admin_action in ("advert", "beacon", "annuncio"):
+            resp_text = f"@[{sender_name}]: 📢 Beacon Advert inviato su RF!"
+            await asyncio.sleep(0.5)
+            frame = build_channel_send_frame(ch_idx, resp_text)
+            sent = await send_to_heltec(frame)
+            if sent:
+                save_message("Auto-Responder", f"Admin {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+                await broadcast_telegram(f"📢 <b>[Admin Radio]</b> Advert richiesto da <b>{sender_name}</b> via RF.", lora_channel_idx=ch_idx)
+            adv_frame = build_send_self_advert_frame(flood=True)
+            await send_to_heltec(adv_frame)
+            return
+
+        elif admin_action in ("reboot", "restart", "riavvia"):
+            resp_text = f"@[{sender_name}]: 🔄 Riavvio Heltec V3 in corso..."
+            await asyncio.sleep(0.5)
+            frame = build_channel_send_frame(ch_idx, resp_text)
+            await send_to_heltec(frame)
+            save_message("Auto-Responder", f"Admin {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+            await broadcast_telegram(f"🔄 <b>[Admin Radio]</b> Riavvio radio richiesto da <b>{sender_name}</b> via RF.", lora_channel_idx=ch_idx)
+            await asyncio.sleep(1.0)
+            reboot_frame = build_reboot_frame()
+            await send_to_heltec(reboot_frame)
+            return
+
+    # Comando Meteo: meteo / !meteo [citta]
+    if clean_word.startswith("meteo") or clean_word.startswith("!meteo") or clean_word.startswith("wx") or clean_word.startswith("!wx"):
+        now = time.time()
+        last_reply = auto_responder_cooldown.get(sender_name, 0)
+        if now - last_reply < 20:
+            print(f"[Silent Rejection] Cooldown meteo attivo per {sender_name} ({int(now - last_reply)}s < 20s)")
+            return
+        if not check_and_record_channel_rate_limit(ch_idx):
+            return
+        auto_responder_cooldown[sender_name] = now
+
+        parts = clean_text.split(None, 1)
+        target_city = parts[1].strip() if len(parts) > 1 else "Buscate"
+        wx_report = await get_weather_forecast(target_city)
+        resp_text = f"@[{sender_name}]: {wx_report}"
+        await asyncio.sleep(0.5)
+        frame = build_channel_send_frame(ch_idx, resp_text)
+        sent = await send_to_heltec(frame)
+        if sent:
+            b_id = save_message("Auto-Responder", f"Meteo {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+            asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
+            await broadcast_telegram(f"🌤️ <b>[Meteo Radio LoRa]</b> Richiesto da <b>{sender_name}</b>:\n<i>{resp_text}</i>", lora_channel_idx=ch_idx)
+            await broadcast_to_browsers({
+                "type": "new_message",
+                "source": "Auto-Responder",
+                "sender": f"Meteo {my_name}",
+                "channel": ch_name,
+                "channel_idx": ch_idx,
+                "content": resp_text,
+                "timestamp": get_rome_now_str(),
+                "snr": None,
+                "hops": 0
+            })
+        return
+
+    # Comando Mailbox: !msg @Target testo oppure !lascia @Target testo
+    m_box = re.match(r'^(?:!msg|msg|!lascia|lascia)\s+@\[([^\]]+)\]\s+(.+)$', content_text, re.IGNORECASE)
+    if not m_box:
+        m_box = re.match(r'^(?:!msg|msg|!lascia|lascia)\s+@(\S+)\s+(.+)$', content_text, re.IGNORECASE)
+    if m_box:
+        t_node = m_box.group(1).strip()
+        t_content = m_box.group(2).strip()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("INSERT INTO mailbox (target_node, sender, channel_idx, content, status) VALUES (?, ?, ?, ?, 'pending')",
+                        (t_node, sender_name, ch_idx, t_content))
+            conn.commit()
+            conn.close()
+            resp_text = f"@[{sender_name}]: 📬 Messaggio registrato per @[{t_node}]! Lo consegnerò appena ascoltato via radio."
+            frame = build_channel_send_frame(ch_idx, resp_text)
+            sent = await send_to_heltec(frame)
+            if sent:
+                b_id = save_message("Mailbox Bot", f"Posta {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+                asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
+                await broadcast_telegram(f"📬 <b>[Mailbox Nuovo Messaggio]</b> Da <b>{sender_name}</b> per <b>@{t_node}</b>:\n\"{t_content}\"", lora_channel_idx=ch_idx)
+            await broadcast_to_browsers({"type": "mailbox_updated"})
+        except Exception as e:
+            print("[Mailbox] Errore inserimento da radio:", e)
+        return
+
     matched_trigger = None
-    for tr in triggers:
-        if text_lower == tr or text_lower.startswith(tr + " ") or text_lower.startswith(tr + ":"):
-            matched_trigger = tr
-            break
+    if clean_word in ("test", "!test") or clean_word.startswith("test ") or clean_word.startswith("!test "):
+        matched_trigger = "test"
+    elif clean_word in ("ping", "!ping") or clean_word.startswith("ping ") or clean_word.startswith("!ping "):
+        matched_trigger = "ping"
+    elif clean_word in ("echo", "!echo") or clean_word.startswith("echo ") or clean_word.startswith("!echo "):
+        matched_trigger = "echo"
+    elif clean_word in ("prova", "!prova") or clean_word.startswith("prova ") or clean_word.startswith("!prova "):
+        matched_trigger = "prova"
+    elif clean_word in ("snr", "!snr") or clean_word.startswith("snr ") or clean_word.startswith("!snr "):
+        matched_trigger = "snr"
+    elif clean_word in ("path", "!path", "percorso", "!percorso", "route", "!route") or clean_word.startswith("path ") or clean_word.startswith("!path ") or clean_word.startswith("percorso "):
+        matched_trigger = "path"
+    elif clean_word in ("status", "!status", "stazione", "!stazione", "chi_sei", "!chi_sei", "?"):
+        matched_trigger = "status"
+    elif clean_word in ("help", "!help"):
+        matched_trigger = "help"
+
     if not matched_trigger:
         return
 
     now = time.time()
     last_reply = auto_responder_cooldown.get(sender_name, 0)
-    if now - last_reply < 60:
-        print(f"Auto-responder: cooldown attivo per {sender_name} ({int(now - last_reply)}s < 60s)")
+    if now - last_reply < 20:
+        print(f"[Silent Rejection] Cooldown attivo per {sender_name} ({int(now - last_reply)}s < 20s)")
         return
+
+    # Rate Limiting per canale (#2 & #3: Silent Rejection)
+    if not check_and_record_channel_rate_limit(ch_idx):
+        return
+
     auto_responder_cooldown[sender_name] = now
 
     snr_val = f"{snr:+.1f}dB" if snr is not None else "N/A"
     hops_lbl = "Diretto RF (0 salti)" if hops == 0 else (f"{hops} salto" if hops == 1 else f"{hops} salti")
 
-    if matched_trigger in ("!ping", "!test", "!echo"):
-        resp_text = f"[@{sender_name}]: Pong! Ricevuto da {my_name} • 📶 SNR {snr_val} • 🔀 {hops_lbl}"
-    elif matched_trigger == "!snr":
-        resp_text = f"[@{sender_name}]: Tuo SNR a {my_name}: {snr_val} • {hops_lbl}"
-    elif matched_trigger in ("!chi_sei", "!stazione", "!status"):
-        freq = node_info.get("freq_mhz", 869.618)
-        resp_text = f"[@{sender_name}]: Stazione {my_name} Heltec V3 • {freq}MHz • SNR {snr_val} • {hops_lbl}"
-    elif matched_trigger == "!help":
-        resp_text = f"[@{sender_name}]: Comandi disponibili: !ping, !test, !snr, !status"
+    dist = get_sender_distance_km(sender_name)
+    if dist is not None:
+        dist_lbl = f" • 📏 {int(dist * 1000)}m" if dist < 1.0 else f" • 📏 {dist:.1f}km"
     else:
-        resp_text = f"[@{sender_name}]: Ricevuto! SNR {snr_val} • {hops_lbl}"
+        dist_lbl = " • 📏 no GPS"
+
+    if matched_trigger in ("ping", "test", "echo", "prova"):
+        resp_text = f"@[{sender_name}]: Pong! Ricevuto da {my_name} • 📶 SNR {snr_val} • 🔀 {hops_lbl}{dist_lbl}"
+    elif matched_trigger == "snr":
+        resp_text = f"@[{sender_name}]: Tuo SNR a {my_name}: {snr_val} • {hops_lbl}{dist_lbl}"
+    elif matched_trigger == "path":
+        if hops == 0:
+            path_desc = "Diretto RF (0 salti)"
+        elif hops == 1:
+            path_desc = "1 salto RF (1 ripetitore)"
+        else:
+            path_desc = f"{hops} salti RF (ripetitori mesh)"
+        resp_text = f"@[{sender_name}]: 🔀 Percorso: {path_desc} • 📶 SNR {snr_val}{dist_lbl} ➔ {my_name}"
+    elif matched_trigger == "status":
+        freq = node_info.get("freq_mhz", 869.618)
+        resp_text = f"@[{sender_name}]: Stazione {my_name} Heltec V3 • {freq}MHz • SNR {snr_val} • {hops_lbl}{dist_lbl}"
+    elif matched_trigger == "help":
+        resp_text = f"@[{sender_name}]: Comandi: test, ping, snr, path, status, meteo, !msg @dest. Admin: !admin stats/advert/reboot [pin]"
+    else:
+        resp_text = f"@[{sender_name}]: Ricevuto! SNR {snr_val} • {hops_lbl}{dist_lbl}"
 
     await asyncio.sleep(0.6)
     frame = build_channel_send_frame(ch_idx, resp_text)
     sent = await send_to_heltec(frame)
     if sent:
-        save_message("Auto-Responder", f"Echo {my_name}", ch_name, resp_text, hops=0)
+        b_id = save_message("Auto-Responder", f"Echo {my_name}", ch_name, resp_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+        asyncio.create_task(auto_retry_message(b_id, ch_idx, resp_text, max_retries=5, interval=45, target_node=sender_name))
         await broadcast_telegram(
             f"🤖 <b>[Auto-Responder Radio]</b>\n"
             f"Comando <code>{content_text}</code> da <b>{sender_name}</b>\n"
@@ -501,6 +815,11 @@ def save_message(source: str, sender: str, channel: str, content: str, snr: Opti
         conn.close()
     except Exception as e:
         print("DB save_message error:", e)
+    try:
+        from room_server import room_server_bridge
+        room_server_bridge.post_message(sender, channel, content)
+    except Exception:
+        pass
     return msg_id
 
 def update_message_ack(msg_id: int, ack_status: str, rtt_ms: Optional[int] = None, hops: Optional[int] = None, ack_nodes_count: Optional[int] = None, ack_nodes: Optional[str] = None):
@@ -768,6 +1087,179 @@ async def send_to_heltec(raw_bytes: bytes) -> bool:
             active_heltec_ws = None
     return False
 
+async def auto_retry_message(msg_id: int, channel_idx: int, lora_text: str, max_retries: int = 5, interval: int = 45, target_node: Optional[str] = None):
+    """
+    Ogni 45 secondi reinvia il messaggio via LoRa se non e' stato recapitato (fino a 5 tentativi).
+    Si interrompe subito se:
+      1. Viene ricevuto un ACK di rete mesh (ack_status == 'confirmed' o ack_nodes_count > 0).
+      2. Qualcuno risponde via radio LoRa sul canale, o risponde specificamente il target_node.
+    """
+    for attempt in range(1, max_retries + 1):
+        await asyncio.sleep(interval)
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("SELECT ack_status, ack_nodes_count, channel, content, sender FROM messages WHERE id = ?", (msg_id,))
+            row = cur.fetchone()
+
+            if not row:
+                conn.close()
+                break
+
+            ch_name = row["channel"] or f"Canale {channel_idx}"
+
+            # 1. Controllo ACK di rete MeshCore
+            if row["ack_status"] in ("confirmed", "replied") or (row["ack_nodes_count"] and row["ack_nodes_count"] > 0):
+                print(f"[AutoRetry] Messaggio #{msg_id} confermato con ACK ({row['ack_nodes_count']} nodi). Nessun reinoltro necessario.")
+                conn.close()
+                break
+
+            # 2. Controllo se qualcuno ha risposto via radio LoRa dopo questo messaggio
+            if target_node:
+                cur.execute(
+                    "SELECT id, sender, content FROM messages WHERE id > ? AND (channel = ? OR sender = ? OR sender LIKE ?) AND source = 'LoRa Mesh' ORDER BY id ASC LIMIT 1",
+                    (msg_id, ch_name, target_node, f"%{target_node}%")
+                )
+            else:
+                cur.execute(
+                    "SELECT id, sender, content FROM messages WHERE id > ? AND channel = ? AND source = 'LoRa Mesh' ORDER BY id ASC LIMIT 1",
+                    (msg_id, ch_name)
+                )
+            reply_msg = cur.fetchone()
+            if reply_msg:
+                replier = reply_msg["sender"]
+                print(f"[AutoRetry] Risposta radio ricevuta da {replier} su [{ch_name}] per msg #{msg_id}. Interrompo subito i tentativi!")
+                cur.execute("UPDATE messages SET ack_status = 'confirmed', ack_nodes_count = COALESCE(ack_nodes_count, 1) WHERE id = ?", (msg_id,))
+                conn.commit()
+                conn.close()
+                await broadcast_to_browsers({
+                    "type": "message_ack",
+                    "msg_id": msg_id,
+                    "status": "confirmed",
+                    "node_name": replier,
+                    "ack_nodes_count": 1
+                })
+                break
+
+            conn.close()
+
+            if not active_heltec_ws:
+                print(f"[AutoRetry] Heltec non connesso, salto reinoltro #{msg_id}.")
+                continue
+
+            frame = build_channel_send_frame(channel_idx, lora_text)
+            sent = await send_to_heltec(frame)
+
+            if sent:
+                retry_status = f"retry_{attempt}"
+                update_message_ack(msg_id, retry_status)
+                print(f"[AutoRetry] Re-inoltrato messaggio #{msg_id} su [{ch_name}] via LoRa (tentativo {attempt}/{max_retries} a {attempt*interval}s)")
+
+                await broadcast_to_browsers({
+                    "type": "message_retry",
+                    "msg_id": msg_id,
+                    "retry_attempt": attempt,
+                    "max_retries": max_retries,
+                    "status": retry_status
+                })
+
+                content_preview = row["content"][:60] + "..." if len(row["content"]) > 60 else row["content"]
+                await broadcast_telegram(
+                    f"🔄 <i>Nessun riscontro dopo {attempt * interval}s: re-inoltrato via radio su [{ch_name}] (tentativo {attempt}/{max_retries}):</i>\n\"{content_preview}\"",
+                    lora_channel_idx=channel_idx
+                )
+        except Exception as e:
+            print(f"[AutoRetry] Errore #{msg_id}: {e}")
+            break
+
+
+# ── Servizio Meteo Open-Meteo ────────────────────────────────────────────────
+WMO_WEATHER_MAP = {
+    0: "Sereno", 1: "Preval. sereno", 2: "Poco nuvoloso", 3: "Coperto",
+    45: "Nebbia", 48: "Nebbia con brina", 51: "Pioggerella", 53: "Pioggerella",
+    55: "Pioggia densa", 61: "Pioggia debole", 63: "Pioggia", 65: "Forte pioggia",
+    71: "Neve debole", 73: "Neve moderata", 75: "Forte neve", 80: "Rovescio",
+    81: "Forte rovescio", 82: "Nubifragio", 95: "Temporale", 96: "Temporale c/grandine"
+}
+
+async def get_weather_forecast(city: str = "Buscate") -> str:
+    import urllib.request, urllib.parse, json
+    lat, lon, place = 45.5448, 8.8147, "Buscate"
+    clean_c = (city or "Buscate").strip()
+    if clean_c.lower() != "buscate":
+        try:
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.parse.quote(clean_c)}&count=1&language=it&format=json"
+            req = urllib.request.Request(geo_url, headers={"User-Agent": "MeshCoreBuscate/1.0"})
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                data = json.loads(resp.read().decode())
+                results = data.get("results", [])
+                if results:
+                    lat = results[0]["latitude"]
+                    lon = results[0]["longitude"]
+                    place = results[0]["name"]
+                else:
+                    return f"Meteo: località '{clean_c}' non trovata."
+        except Exception as e:
+            return f"Meteo: errore geocoding per '{clean_c}'."
+
+    try:
+        wx_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat:.4f}&longitude={lon:.4f}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,surface_pressure"
+        req = urllib.request.Request(wx_url, headers={"User-Agent": "MeshCoreBuscate/1.0"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            d = json.loads(resp.read().decode())
+            c = d.get("current", {})
+            t = c.get("temperature_2m", "N/A")
+            app_t = c.get("apparent_temperature", t)
+            rh = c.get("relative_humidity_2m", "N/A")
+            p = int(round(c.get("surface_pressure", 1013)))
+            code = c.get("weather_code", 0)
+            desc = WMO_WEATHER_MAP.get(code, "Variabile")
+            w = c.get("wind_speed_10m", "N/A")
+            return f"Meteo {place}: {t}°C (perc. {app_t}°) • Ur {rh}% • {p}hPa • {desc} • Vento {w}km/h"
+    except Exception as e:
+        return f"Meteo: servizio temporaneamente non disponibile ({e})."
+
+# ── Mailbox Off-Grid Recapito Automatico ─────────────────────────────────────
+async def check_and_deliver_mailbox(sender_name: str, ch_idx: int = 0, ch_name: str = "Public"):
+    if not sender_name or sender_name in ("Buscate", "Web Client", "Web API", "Telegram", "Echo Buscate", "Nodo Radio", "Unknown"):
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, sender, content, channel_idx FROM mailbox WHERE (target_node = ? OR target_node = ? OR target_node LIKE ?) AND status = 'pending' ORDER BY id ASC LIMIT 1",
+            (sender_name, sender_name.replace(" ", ""), f"%{sender_name}%")
+        )
+        row = cur.fetchone()
+        if row:
+            m_id = row["id"]
+            p_sender = row["sender"]
+            p_content = row["content"]
+            target_ch = row["channel_idx"] if row["channel_idx"] is not None else ch_idx
+            cur.execute("UPDATE mailbox SET status = 'delivered', delivered_at = CURRENT_TIMESTAMP WHERE id = ?", (m_id,))
+            conn.commit()
+            conn.close()
+
+            my_name = node_info.get("name", "Buscate")
+            delivery_text = f"@[{sender_name}]: 📬 Messaggio differito da @[{p_sender}]: \"{p_content}\""
+            frame = build_channel_send_frame(target_ch, delivery_text)
+            sent = await send_to_heltec(frame)
+            if sent:
+                b_id = save_message("Mailbox Bot", f"Posta {my_name}", ch_name, delivery_text, hops=0, ack_status="sent_to_radio", ack_nodes_count=0)
+                asyncio.create_task(auto_retry_message(b_id, target_ch, delivery_text, max_retries=5, interval=45, target_node=sender_name))
+                await broadcast_telegram(
+                    f"📬 <b>[Mailbox Delivery LoRa]</b>\nRecapitato via radio a <b>@{sender_name}</b> (da @{p_sender}):\n<i>\"{p_content}\"</i>",
+                    lora_channel_idx=target_ch
+                )
+            await broadcast_to_browsers({"type": "mailbox_updated"})
+            print(f"[Mailbox] Consegnato messaggio differito #{m_id} a {sender_name}")
+        else:
+            conn.close()
+    except Exception as e:
+        print("[Mailbox] Errore check_and_deliver_mailbox:", e)
+
 def build_channel_send_frame(channel_idx: int, text: str) -> bytes:
     now_ts = int(time.time())
     text_bytes = text.encode("utf-8")
@@ -859,14 +1351,17 @@ async def query_all_heltec_channels():
     await send_to_heltec(build_get_contacts_frame(0))
     await asyncio.sleep(0.1)
     await send_to_heltec(build_sync_next_msg_frame())
+    # Attiva sovrascrittura automatica contatti più vecchi quando la memoria è piena (Bit 0: AUTO_ADD_OVERWRITE_OLDEST)
+    autoadd_payload = bytes([58, 0x1F, 7])
+    await send_to_heltec(b"<" + struct.pack("<H", len(autoadd_payload)) + autoadd_payload)
     # Send regional scope configuration if supported by Heltec CLI/firmware
     scope = node_info.get("regional_scope", "it")
     if scope:
         await asyncio.sleep(0.05)
         try:
-            await send_to_heltec(f"region default {scope}\r\n".encode("utf-8"))
+            pass  # region CLI commands are not binary companion frames
             await asyncio.sleep(0.05)
-            await send_to_heltec(b"region save\r\n")
+            pass  # region CLI commands are not binary companion frames
         except Exception:
             pass
 
@@ -941,13 +1436,15 @@ def calc_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> Tuple[in
     idx = round(theta / 22.5) % 16
     return round(theta), compass_dirs[idx]
 
-async def execute_direct_nodes_scan() -> List[dict]:
-    """Invia frame di advert zero-hop (senza ripetitori) e sync contatti per rilevare nodi diretti RF."""
+async def execute_direct_nodes_scan(wait_seconds: float = 25.0) -> List[dict]:
+    """Invia frame di advert zero-hop (senza ripetitori) e sync contatti per rilevare nodi diretti RF con finestra di ascolto prolungata."""
     frame_adv = build_send_self_advert_frame(flood=False)
     await send_to_heltec(frame_adv)
-    await asyncio.sleep(0.1)
-    frame_contacts = build_get_contacts_frame(0)
-    await send_to_heltec(frame_contacts)
+    cycles = max(1, int(wait_seconds / 5.0))
+    for _ in range(cycles):
+        await asyncio.sleep(5.0)
+        frame_contacts = build_get_contacts_frame(0)
+        await send_to_heltec(frame_contacts)
     return get_recent_heard_nodes(50, direct_only=True)
 
 def build_main_menu_keyboard() -> dict:
@@ -971,7 +1468,7 @@ def build_main_menu_keyboard() -> dict:
             ],
             [
                 {"text": "⚙️ Impostazioni", "callback_data": "menu_settings"},
-                {"text": "🌐 Web Client UI", "url": "https://meshcore-room-bot.onrender.com/app"}
+                {"text": "🌐 Web Client UI", "url": WEB_APP_URL}
             ]
         ]
     }
@@ -1140,17 +1637,18 @@ async def periodic_heartbeat_loop():
             await asyncio.sleep(60)
 
 async def keep_alive_loop():
-    """Pinga il proprio endpoint /health ogni 10 minuti per evitare il sleep di Render (piano free)."""
-    await asyncio.sleep(30)  # aspetta l'avvio completo
-    self_url = "https://meshcore-room-bot.onrender.com/health"
+    """Pinga il proprio endpoint /health localmente per tenere traccia dello stato."""
+    await asyncio.sleep(30)
+    port = int(os.getenv("PORT", "8000"))
+    self_url = f"http://127.0.0.1:{port}/health"
     while True:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(self_url)
-                print(f"[KeepAlive] ping → {resp.status_code}")
+                # status ok
         except Exception as e:
             print(f"[KeepAlive] errore: {e}")
-        await asyncio.sleep(600)  # ogni 10 minuti
+        await asyncio.sleep(600)
 
 async def periodic_beacon_loop():
     """Invia periodicamente un annuncio Beacon Advert se beacon_interval_min > 0."""
@@ -1178,6 +1676,146 @@ async def periodic_beacon_loop():
             print("Beacon loop error:", e)
             await asyncio.sleep(30)
 
+# --- Companion Proxy Multi-Client State ---
+connected_companion_clients = {}  # {StreamWriter: asyncio.Queue}
+heltec_raw_writer = None
+heltec_write_lock = asyncio.Lock()
+heltec_connected_evt = asyncio.Event()
+
+async def companion_client_handler(c_reader: asyncio.StreamReader, c_writer: asyncio.StreamWriter):
+    peer = c_writer.get_extra_info("peername")
+    print(f"[Companion Proxy] 📱 App MeshCore connessa da {peer}", flush=True)
+    q = asyncio.Queue(maxsize=512)
+    connected_companion_clients[c_writer] = q
+
+    async def writer_task():
+        try:
+            while True:
+                chunk = await q.get()
+                if chunk is None:
+                    break
+                c_writer.write(chunk)
+                await c_writer.drain()
+        except Exception:
+            pass
+
+    wt = asyncio.create_task(writer_task())
+    try:
+        while True:
+            data = await c_reader.read(4096)
+            if not data:
+                break
+            try:
+                await asyncio.wait_for(heltec_connected_evt.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                continue
+            async with heltec_write_lock:
+                if heltec_raw_writer:
+                    heltec_raw_writer.write(data)
+                    await heltec_raw_writer.drain()
+    except Exception as e:
+        print(f"[Companion Proxy] Errore / disconnessione client {peer}: {e}")
+    finally:
+        connected_companion_clients.pop(c_writer, None)
+        try:
+            q.put_nowait(None)
+        except Exception:
+            pass
+        await asyncio.sleep(0.1)
+        wt.cancel()
+        try:
+            c_writer.close()
+            await c_writer.wait_closed()
+        except Exception:
+            pass
+        print(f"[Companion Proxy] 📱 App MeshCore disconnessa da {peer}", flush=True)
+
+async def start_companion_server():
+    for p in (5000, 38500):
+        try:
+            s = await asyncio.start_server(companion_client_handler, "0.0.0.0", p)
+            print(f"[Companion Proxy] 🚀 Proxy server per App MeshCore avviato su 0.0.0.0:{p}", flush=True)
+            asyncio.create_task(s.serve_forever())
+        except Exception as e:
+            print(f"[Companion Proxy] Errore avvio porta {p}: {e}", flush=True)
+
+async def heltec_bridge_loop():
+    global heltec_raw_writer
+    port = int(os.getenv("PORT", "8000"))
+    ws_url = f"ws://127.0.0.1:{port}/ws/mesh"
+    
+    await asyncio.sleep(2)
+    use_serial = bool(HELTEC_SERIAL_PORT and os.path.exists(HELTEC_SERIAL_PORT))
+    target_desc = f"Serial {HELTEC_SERIAL_PORT}" if use_serial else f"TCP {HELTEC_TCP_HOST}:{HELTEC_TCP_PORT}"
+    print(f"[Bridge] Starting auto-bridge {target_desc} -> {ws_url}...")
+    
+    while True:
+        try:
+            if use_serial:
+                import serial_asyncio
+                print(f"[Bridge] Connecting to Heltec Serial at {HELTEC_SERIAL_PORT}...")
+                reader, writer = await serial_asyncio.open_serial_connection(url=HELTEC_SERIAL_PORT, baudrate=115200)
+            elif HELTEC_TCP_HOST:
+                print(f"[Bridge] Connecting to Heltec TCP at {HELTEC_TCP_HOST}:{HELTEC_TCP_PORT}...")
+                reader, writer = await asyncio.open_connection(HELTEC_TCP_HOST, HELTEC_TCP_PORT)
+            else:
+                await asyncio.sleep(5)
+                continue
+
+            async with heltec_write_lock:
+                heltec_raw_writer = writer
+            heltec_connected_evt.set()
+
+            print(f"[Bridge] Connected to {target_desc}! Connecting to {ws_url}...")
+            import websockets
+            async with websockets.connect(ws_url) as ws:
+                print("[Bridge] Connected to local WebSocket! Bridge is fully active.")
+                
+                async def heltec_to_ws():
+                    while True:
+                        data = await reader.read(4096)
+                        if not data:
+                            break
+                        try:
+                            await ws.send(data)
+                        except Exception:
+                            pass
+                        if connected_companion_clients:
+                            dead = []
+                            for cw, q in list(connected_companion_clients.items()):
+                                try:
+                                    q.put_nowait(data)
+                                except Exception:
+                                    dead.append(cw)
+                            for d in dead:
+                                connected_companion_clients.pop(d, None)
+
+                async def ws_to_heltec():
+                    async for msg in ws:
+                        if isinstance(msg, str):
+                            msg = msg.encode("utf-8")
+                        async with heltec_write_lock:
+                            if heltec_raw_writer:
+                                heltec_raw_writer.write(msg)
+                                await heltec_raw_writer.drain()
+
+                done, pending = await asyncio.wait(
+                    [asyncio.create_task(heltec_to_ws()), asyncio.create_task(ws_to_heltec())],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                for t in pending:
+                    t.cancel()
+        except ConnectionResetError:
+            print("[Bridge] Connessione resettata dall'Heltec. Attendo 5s...")
+            await asyncio.sleep(5)
+        except Exception as e:
+            print(f"[Bridge] Connection error ({e}), retrying in 4s...")
+            await asyncio.sleep(4)
+        finally:
+            heltec_connected_evt.clear()
+            async with heltec_write_lock:
+                heltec_raw_writer = None
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
@@ -1204,6 +1842,21 @@ async def startup_event():
     asyncio.create_task(periodic_heartbeat_loop())
     asyncio.create_task(periodic_beacon_loop())
     asyncio.create_task(keep_alive_loop())
+    asyncio.create_task(start_companion_server())
+    asyncio.create_task(heltec_bridge_loop())
+    try:
+        from room_server import room_server_bridge
+        room_server_bridge.start()
+    except Exception as e:
+        print("[Startup] Error starting room_server_bridge:", e)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    try:
+        from room_server import room_server_bridge
+        room_server_bridge.stop()
+    except Exception:
+        pass
 
 @app.get("/health")
 async def health():
@@ -1327,19 +1980,24 @@ async def websocket_client_endpoint(websocket: WebSocket):
                 client_id = data.get("client_id")
                 ch_idx = int(data.get("channel_idx", 0))
                 text = str(data.get("text", "")).strip()
-                sender = str(data.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
+                my_name = node_info.get("name", "Buscate")
+                raw_sender = str(data.get("sender", my_name)).strip()
+                sender = my_name if (not raw_sender or raw_sender == "Web-Operatore") else raw_sender
                 reply_to_sender = data.get("reply_to_sender")
                 reply_to_text = data.get("reply_to_text")
                 if text:
                     ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
                     msg_id = save_message("Web Client", sender, ch_name, text, ack_status="sent_to_radio", rtt_ms=None)
-                    frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
+                    lora_text = text if sender == my_name else f"[{sender}]: {text}"
+                    frame = build_channel_send_frame(ch_idx, lora_text)
                     sent = await send_to_heltec(frame)
+                    if sent:
+                        asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=5, interval=45))
 
                     if reply_to_sender:
-                        tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n↩️ <i>Risposta a @{reply_to_sender}</i>\n👤 <b>{sender}</b>: {text}"
+                        tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n↩️ <i>Risposta a @{reply_to_sender}</i>\n{text}"
                     else:
-                        tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n👤 <b>{sender}</b>: {text}"
+                        tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n{text}"
                     await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
 
                     await broadcast_to_browsers({
@@ -1483,9 +2141,9 @@ async def websocket_client_endpoint(websocket: WebSocket):
                     set_node_setting("regional_scope", new_scope)
                     if active_heltec_ws:
                         try:
-                            await send_to_heltec(f"region default {new_scope}\r\n".encode("utf-8"))
+                            pass  # region CLI commands are not binary companion frames
                             await asyncio.sleep(0.05)
-                            await send_to_heltec(b"region save\r\n")
+                            pass  # region CLI commands are not binary companion frames
                         except Exception:
                             pass
                     await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
@@ -1522,6 +2180,205 @@ async def api_status():
         "active_web_clients": len(active_browser_clients)
     }
 
+
+# ── API Mailbox & Preferiti & Statistiche 24h ────────────────────────────────
+@app.get("/api/mailbox")
+async def api_get_mailbox():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM mailbox WHERE status = 'pending' ORDER BY id DESC")
+    pending = [dict(r) for r in cur.fetchall()]
+    cur.execute("SELECT * FROM mailbox WHERE status = 'delivered' ORDER BY delivered_at DESC LIMIT 20")
+    delivered = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return {"pending": pending, "delivered": delivered}
+
+@app.post("/api/mailbox")
+async def api_add_mailbox(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    target = str(body.get("target_node", "")).strip()
+    content = str(body.get("content", "")).strip()
+    ch_idx = int(body.get("channel_idx", 0))
+    my_name = node_info.get("name", "Buscate")
+    sender = str(body.get("sender", my_name)).strip() or my_name
+    if not target or not content:
+        return JSONResponse({"error": "Destinatario e testo obbligatori"}, status_code=400)
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO mailbox (target_node, sender, channel_idx, content, status) VALUES (?, ?, ?, ?, 'pending')",
+        (target, sender, ch_idx, content)
+    )
+    m_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    await broadcast_to_browsers({"type": "mailbox_updated"})
+    return {"success": True, "id": m_id}
+
+@app.delete("/api/mailbox/{msg_id}")
+async def api_delete_mailbox(msg_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM mailbox WHERE id = ?", (msg_id,))
+    conn.commit()
+    conn.close()
+    await broadcast_to_browsers({"type": "mailbox_updated"})
+    return {"success": True}
+
+@app.post("/api/mailbox/{msg_id}/send_now")
+async def api_send_mailbox_now(msg_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM mailbox WHERE id = ?", (msg_id,))
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"error": "Messaggio non trovato"}, status_code=404)
+    cur.execute("UPDATE mailbox SET status = 'delivered', delivered_at = CURRENT_TIMESTAMP WHERE id = ?", (msg_id,))
+    conn.commit()
+    conn.close()
+
+    target = row["target_node"]
+    sender = row["sender"]
+    content = row["content"]
+    ch_idx = row["channel_idx"] if row["channel_idx"] is not None else 0
+    ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
+    delivery_text = f"@[{target}]: 📬 Messaggio differito da @[{sender}]: \"{content}\""
+    frame = build_channel_send_frame(ch_idx, delivery_text)
+    sent = await send_to_heltec(frame)
+    if sent:
+        save_message("Mailbox Bot", f"Posta {node_info.get('name', 'Buscate')}", ch_name, delivery_text, hops=0)
+        await broadcast_telegram(
+            f"📬 <b>[Mailbox Delivery Immediato]</b> Inviato via radio a <b>@{target}</b> da @{sender}:\n<i>\"{content}\"</i>",
+            lora_channel_idx=ch_idx
+        )
+    await broadcast_to_browsers({"type": "mailbox_updated"})
+    return {"success": True, "sent": sent}
+
+@app.get("/api/favorites")
+async def api_get_favorites():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT node_name, notes, created_at FROM favorite_nodes ORDER BY node_name COLLATE NOCASE ASC")
+    favs = [{"node_name": r[0], "notes": r[1], "created_at": r[2]} for r in cur.fetchall()]
+    conn.close()
+    return {"favorites": favs}
+
+@app.post("/api/favorites")
+async def api_add_favorite(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    node_name = str(body.get("node_name", "")).strip()
+    if not node_name:
+        return JSONResponse({"error": "Nome nodo obbligatorio"}, status_code=400)
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO favorite_nodes (node_name) VALUES (?)", (node_name,))
+    conn.commit()
+    conn.close()
+    await broadcast_to_browsers({"type": "favorites_updated"})
+    return {"success": True}
+
+@app.delete("/api/favorites/{node_name}")
+async def api_del_favorite(node_name: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM favorite_nodes WHERE node_name = ?", (node_name,))
+    conn.commit()
+    conn.close()
+    await broadcast_to_browsers({"type": "favorites_updated"})
+    return {"success": True}
+
+@app.get("/api/stats/rf_24h")
+async def api_stats_rf_24h():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute('''
+        SELECT strftime('%H:00', timestamp) as hr, 
+               COUNT(*) as count, 
+               ROUND(AVG(snr), 1) as avg_snr
+        FROM messages 
+        WHERE timestamp >= datetime('now', '-24 hours')
+        GROUP BY hr
+        ORDER BY timestamp ASC
+    ''')
+    hourly = [{"hour": r[0], "count": r[1], "avg_snr": r[2]} for r in cur.fetchall()]
+
+    cur.execute('''
+        SELECT channel, COUNT(*) as cnt
+        FROM messages
+        WHERE timestamp >= datetime('now', '-24 hours')
+        GROUP BY channel
+        ORDER BY cnt DESC
+    ''')
+    channels_dist = [{"channel": r[0], "count": r[1]} for r in cur.fetchall()]
+
+    cur.execute('''
+        SELECT sender, COUNT(*) as cnt, ROUND(AVG(snr), 1) as avg_snr
+        FROM messages
+        WHERE timestamp >= datetime('now', '-24 hours') 
+          AND sender NOT IN ('Echo Buscate', 'Buscate', 'Web-Operatore', 'Web Client', 'Mailbox Bot')
+        GROUP BY sender
+        ORDER BY cnt DESC
+        LIMIT 10
+    ''')
+    top_senders = [{"sender": r[0], "count": r[1], "avg_snr": r[2]} for r in cur.fetchall()]
+    conn.close()
+    return {
+        "hourly": hourly,
+        "channels": channels_dist,
+        "top_senders": top_senders
+    }
+
+@app.get("/api/nodes/geo")
+async def api_nodes_geo():
+    my_lat = float(get_node_setting("lat", "45.5448") or 45.5448)
+    my_lon = float(get_node_setting("lon", "8.8147") or 8.8147)
+    my_name = node_info.get("name", "Buscate")
+
+    nodes = []
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute('''
+        SELECT h.node_name, h.last_seen, h.last_snr, h.last_hops, h.last_channel,
+               COALESCE(h.lat, g.lat) as lat,
+               COALESCE(h.lon, g.lon) as lon,
+               h.packets_count
+        FROM heard_nodes h
+        LEFT JOIN (
+            SELECT node_name, lat, lon FROM node_gps_history GROUP BY node_name HAVING id = MAX(id)
+        ) g ON h.node_name = g.node_name
+        WHERE COALESCE(h.lat, g.lat) IS NOT NULL AND COALESCE(h.lon, g.lon) IS NOT NULL
+    ''')
+    for r in cur.fetchall():
+        lat = r["lat"]
+        lon = r["lon"]
+        dist = haversine_km(my_lat, my_lon, lat, lon) if (lat and lon) else None
+        nodes.append({
+            "node_name": r["node_name"],
+            "last_seen": r["last_seen"],
+            "last_snr": r["last_snr"],
+            "last_hops": decode_meshcore_hops(r["last_hops"]),
+            "last_channel": r["last_channel"],
+            "lat": lat,
+            "lon": lon,
+            "packets_count": r["packets_count"],
+            "distance_km": round(dist, 1) if dist is not None else None
+        })
+    conn.close()
+    return {
+        "home": {"name": my_name, "lat": my_lat, "lon": my_lon},
+        "nodes": nodes
+    }
+
 @app.get("/api/messages")
 async def api_messages(limit: int = 50, channel: Optional[str] = None):
     return get_recent_messages(limit, channel=channel)
@@ -1556,13 +2413,18 @@ async def api_send(request: Request):
 
     ch_idx = int(body.get("channel_idx", 0))
     ch_name = discovered_channels.get(ch_idx, f"Canale {ch_idx}")
-    sender = str(body.get("sender", "Web-Operatore")).strip() or "Web-Operatore"
+    my_name = node_info.get("name", "Buscate")
+    raw_sender = str(body.get("sender", my_name)).strip()
+    sender = my_name if (not raw_sender or raw_sender == "Web-Operatore") else raw_sender
 
     msg_id = save_message("Web API", sender, ch_name, text, ack_status="sent_to_radio", ack_nodes_count=0)
-    frame = build_channel_send_frame(ch_idx, f"[{sender}]: {text}")
+    lora_text = text if sender == my_name else f"[{sender}]: {text}"
+    frame = build_channel_send_frame(ch_idx, lora_text)
     sent = await send_to_heltec(frame)
+    if sent:
+        asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=5, interval=45))
 
-    tg_msg = f"🌐 <b>[Web API ➔ Canale {ch_idx}: {ch_name}]</b>\n👤 <b>{sender}</b>: {text}"
+    tg_msg = f"🌐 <b>[Web API ➔ Canale {ch_idx}: {ch_name}]</b>\n{text}"
     await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
 
     await broadcast_to_browsers({
@@ -1672,9 +2534,9 @@ async def api_settings_node(request: Request):
         set_node_setting("regional_scope", clean_scope)
         if active_heltec_ws:
             try:
-                await send_to_heltec(f"region default {clean_scope}\r\n".encode("utf-8"))
+                pass  # region CLI commands are not binary companion frames
                 await asyncio.sleep(0.05)
-                await send_to_heltec(b"region save\r\n")
+                pass  # region CLI commands are not binary companion frames
             except Exception:
                 pass
         await broadcast_telegram(f"🌐 <b>Ambito Regionale aggiornato da Web:</b> <code>{clean_scope.upper()}</code>")
@@ -1724,9 +2586,9 @@ async def api_set_scope(request: Request):
     sent = False
     if active_heltec_ws:
         try:
-            await send_to_heltec(f"region default {scope}\r\n".encode("utf-8"))
+            pass  # region CLI commands are not binary companion frames
             await asyncio.sleep(0.05)
-            await send_to_heltec(b"region save\r\n")
+            pass  # region CLI commands are not binary companion frames
             sent = True
         except Exception:
             pass
@@ -1868,15 +2730,53 @@ async def api_nodes_direct(limit: int = 50):
 @app.post("/api/nodes/scan")
 async def api_nodes_scan(direct_only: bool = False):
     if direct_only:
-        nodes = await execute_direct_nodes_scan()
+        nodes = await execute_direct_nodes_scan(wait_seconds=25.0)
     else:
         frame_adv = build_send_self_advert_frame(flood=False)
-        sent_adv = await send_to_heltec(frame_adv)
-        await asyncio.sleep(0.1)
-        frame_contacts = build_get_contacts_frame(0)
-        sent_contacts = await send_to_heltec(frame_contacts)
+        await send_to_heltec(frame_adv)
+        for _ in range(5):
+            await asyncio.sleep(5.0)
+            frame_contacts = build_get_contacts_frame(0)
+            await send_to_heltec(frame_contacts)
         nodes = get_recent_heard_nodes(50, direct_only=False)
     return {"success": True, "direct_only": direct_only, "nodes": nodes}
+
+@app.get("/api/room_server")
+async def api_get_room_server():
+    from room_server import room_server_bridge
+    return room_server_bridge.get_status()
+
+@app.post("/api/room_server/post")
+async def api_post_room_server(request: Request):
+    from room_server import room_server_bridge
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = (body.get("text") or "").strip()
+    sender = (body.get("sender") or "Web Operator").strip()
+    channel = (body.get("channel") or "Room").strip()
+    if not text:
+        return JSONResponse({"success": False, "error": "Testo mancante"}, status_code=400)
+    room_server_bridge.post_message(sender, channel, text)
+    return {"success": True, "status": room_server_bridge.get_status()}
+
+@app.post("/api/room_server/sync_time")
+async def api_sync_room_server_time():
+    from room_server import room_server_bridge
+    room_server_bridge.sync_time()
+    return {"success": True}
+
+@app.post("/api/room_server/advert")
+async def api_advert_room_server(request: Request):
+    from room_server import room_server_bridge
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    zerohop = bool(body.get("zerohop", True))
+    room_server_bridge.trigger_advert(zerohop=zerohop)
+    return {"success": True}
 
 @app.websocket("/ws/mesh")
 async def websocket_mesh_endpoint(websocket: WebSocket):
@@ -1887,7 +2787,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
     stats["last_seen"] = stats["connected_since"]
     
     print("Heltec V3 connected via WebSocket!")
-    await broadcast_telegram("🟢 <b>Heltec V3 collegata con successo al server Render!</b>\nInterrogo la scheda per leggere i canali configurati...")
+    await broadcast_telegram("🟢 <b>Heltec V3 collegata con successo al Raspberry Pi!</b>\nInterrogo la scheda per leggere i canali configurati...")
     await broadcast_to_browsers({
         "type": "status",
         "heltec_connected": True,
@@ -1951,7 +2851,13 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
 
                 # PUSH_CODE_MSG_WAITING = 0x83 (131)
                 elif code == 0x83:
-                    await send_to_heltec(build_sync_next_msg_frame())
+                    if len(connected_companion_clients) == 0:
+                        await send_to_heltec(build_sync_next_msg_frame())
+                    else:
+                        async def delayed_sync_fallback():
+                            await asyncio.sleep(2.5)
+                            await send_to_heltec(build_sync_next_msg_frame())
+                        asyncio.create_task(delayed_sync_fallback())
 
                 # RESP_CODE_CHANNEL_MSG_RECV_V3 = 17 (0x11)
                 elif code == 17 and len(payload) >= 11:
@@ -2106,6 +3012,9 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                             "channel_idx": ch_idx
                         })
 
+                    # Check Mailbox pending delivery for sender
+                    asyncio.create_task(check_and_deliver_mailbox(sender_name, ch_idx, ch_name))
+
                     # Trigger Auto-Responder
                     asyncio.create_task(
                         handle_auto_responder(sender_name, ch_idx, ch_name, content_text, None, hops)
@@ -2148,6 +3057,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                         adv_lon = (gps_lon_raw / 1000000.0) if gps_lon_raw != 0 else None
                         if contact_name:
                             record_heard_node(contact_name, None, out_path_len, "Advert", adv_lat, adv_lon)
+                            asyncio.create_task(check_and_deliver_mailbox(contact_name, 0, "Public"))
                             adv_h = decode_meshcore_hops(out_path_len)
                             if adv_h == 0 and check_and_alert_direct_node(contact_name, None, 0):
                                 await broadcast_telegram(f"🎯 <b>[Radar RF] Nuovo Beacon Diretto!</b>\n📟 <b>{contact_name}</b> a 0 salti RF!")
@@ -2233,7 +3143,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
-                        cur.execute("SELECT id, ack_nodes_count FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') ORDER BY id DESC LIMIT 1")
+                        cur.execute("SELECT id, ack_nodes_count FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot', 'Auto-Responder', 'Mailbox Bot') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
                             target_msg_id = last_m[0]
@@ -2283,7 +3193,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
-                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') AND ack_status NOT IN ('confirmed') ORDER BY id DESC LIMIT 1")
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot', 'Auto-Responder', 'Mailbox Bot') AND ack_status NOT IN ('confirmed') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
                             target_msg_id = last_m[0]
@@ -2310,7 +3220,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     try:
                         conn = sqlite3.connect(DB_PATH)
                         cur = conn.cursor()
-                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot') AND ack_status NOT IN ('confirmed') ORDER BY id DESC LIMIT 1")
+                        cur.execute("SELECT id FROM messages WHERE source IN ('Web Client', 'Web API', 'Telegram', 'Echo Bot', 'Auto-Responder', 'Mailbox Bot') AND ack_status NOT IN ('confirmed') ORDER BY id DESC LIMIT 1")
                         last_m = cur.fetchone()
                         if last_m:
                             target_msg_id = last_m[0]
@@ -2333,7 +3243,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
     finally:
         if active_heltec_ws == websocket:
             active_heltec_ws = None
-        await broadcast_telegram("🔴 <b>Heltec V3 disconnessa dal server Render.</b>\nIn attesa di riconnessione automatica...")
+        await broadcast_telegram("🔴 <b>Heltec V3 disconnessa dal Raspberry Pi.</b>\nIn attesa di riconnessione automatica...")
         await broadcast_to_browsers({
             "type": "status",
             "heltec_connected": False,
@@ -2415,16 +3325,58 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
         await ack("Scansione nodi diretti RF..." if data == "scan_direct_now" else None)
         is_scan = (data == "scan_direct_now")
         if is_scan:
-            await execute_direct_nodes_scan()
+            await send_telegram("🎯 <b>Scansione Nodi Diretti RF avviata (25 secondi)...</b>\n<i>Trasmesso beacon Zero-Hop. In ascolto risposte radio dirette...</i>", chat_id=chat_id)
+            await execute_direct_nodes_scan(wait_seconds=25.0)
         nodes = get_recent_heard_nodes(50, direct_only=True)
         my_lat = node_info.get("lat")
         my_lon = node_info.get("lon")
-        header = "🎯 <b>SCANSIONE NODI DIRETTI RF EFFETTUATA!</b>\n📡 <i>Beacon Advert Zero-Hop trasmesso senza rimbalzi.</i>\n\n" if is_scan else ""
+        header = "🎯 <b>SCANSIONE NODI DIRETTI RF COMPLETATA (25s)!</b>\n📡 <i>Beacon Advert Zero-Hop trasmesso senza rimbalzi.</i>\n\n" if is_scan else ""
         await send_telegram(
             header + format_node_list_rich(nodes, my_lat, my_lon, direct_only=True),
             chat_id=chat_id,
             reply_markup=build_nodes_keyboard(direct_only=True)
         )
+
+    # ── Reinvia messaggio non confermato ─────────────────────────────────────
+    elif data.startswith("resend_msg_"):
+        try:
+            m_id = int(data.split("_")[-1])
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM messages WHERE id = ?", (m_id,))
+            row = cur.fetchone()
+            conn.close()
+            if row:
+                content = row["content"]
+                sender = row["sender"] or "Telegram"
+                ch_name = row["channel"]
+                resolved_ch = resolve_channel(ch_name) if ch_name else 0
+                if resolved_ch is None:
+                    resolved_ch = 0
+                frame = build_channel_send_frame(resolved_ch, f"[{sender}]: {content}")
+                sent = await send_to_heltec(frame)
+                if sent:
+                    new_id = save_message("Telegram", sender, ch_name, content, ack_status="sent_to_radio", ack_nodes_count=0)
+                    asyncio.create_task(auto_retry_message(new_id, resolved_ch, f"[{sender}]: {content}", max_retries=5, interval=45))
+                    await ack("🔄 Messaggio reinviato via radio!")
+                    retry_kb = {
+                        "inline_keyboard": [
+                            [{"text": "🔄 Reinvia via Radio", "callback_data": f"resend_msg_{new_id}"}]
+                        ]
+                    }
+                    await send_telegram(
+                        f"🔄 <i>Messaggio reinviato su [Canale {resolved_ch}: {ch_name}] via LoRa:</i>\n\"{content}\"",
+                        chat_id=chat_id,
+                        reply_markup=retry_kb
+                    )
+                else:
+                    await ack("⚠️ Heltec offline.")
+            else:
+                await ack("⚠️ Messaggio non trovato.")
+        except Exception as e:
+            print("Error resending message:", e)
+            await ack("⚠️ Errore reinvio.")
 
     # ── Report stazione ─────────────────────────────────────────────────────
     elif data == "menu_report":
@@ -2473,13 +3425,13 @@ async def handle_callback_query(cq: dict, client: httpx.AsyncClient):
         if not active_heltec_ws:
             await send_telegram("⚠️ Heltec non connessa. Impossibile eseguire la scansione.", chat_id=chat_id, reply_markup=build_main_menu_keyboard())
         else:
-            await send_telegram("🔍 <b>Scansione nodi vicini avviata...</b>\n<i>Invio beacon zero-hop e interrogazione contatti mesh. Attendi ~5 secondi...</i>", chat_id=chat_id)
+            await send_telegram("🔍 <b>Scansione nodi vicini avviata (finestra di ascolto 25 secondi)...</b>\n<i>Invio beacon zero-hop e ascolto radio LoRa per 25s. Attendi...</i>", chat_id=chat_id)
             frame_adv = build_send_self_advert_frame(flood=False)
             await send_to_heltec(frame_adv)
-            await asyncio.sleep(0.2)
-            frame_contacts = build_get_contacts_frame(0)
-            await send_to_heltec(frame_contacts)
-            await asyncio.sleep(5.0)
+            for _ in range(5):
+                await asyncio.sleep(5.0)
+                frame_contacts = build_get_contacts_frame(0)
+                await send_to_heltec(frame_contacts)
             nodes = get_recent_heard_nodes(50)
             my_lat = node_info.get("lat")
             my_lon = node_info.get("lon")
@@ -2714,6 +3666,76 @@ async def telegram_polling_loop():
                             message_thread_id=thread_id
                         )
 
+                    elif text.startswith("/room_status") or text.startswith("/room_info"):
+                        from room_server import room_server_bridge
+                        r_stat = room_server_bridge.get_status()
+                        conn_str = "🟢 Connesso via USB" if r_stat.get("connected") else "🔴 Disconnesso"
+                        batt_str = f"{r_stat.get('battery_mv', 0)/1000.0:.2f} V" if r_stat.get("battery_mv") else "N/D"
+                        uptime_m = round((r_stat.get('uptime_secs') or 0) / 60)
+                        await send_telegram(
+                            f"🏛️ <b>STATO ROOM SERVER (Heltec #2 USB)</b>\n\n"
+                            f"• Nome: <b>{r_stat.get('name', 'Buscate-Room')}</b>\n"
+                            f"• Stato: {conn_str} (<code>{r_stat.get('port')}</code>)\n"
+                            f"• Frequenza: <b>{r_stat.get('freq_mhz', 869.618)} MHz</b>\n"
+                            f"• Uptime: <b>{uptime_m} minuti</b>\n"
+                            f"• Batteria: <b>{batt_str}</b>\n"
+                            f"• Noise floor: <b>{r_stat.get('noise_floor', 'N/D')} dBm</b>\n"
+                            f"• Ultimo RSSI / SNR: <b>{r_stat.get('last_rssi', 'N/D')} dBm</b> / <b>{r_stat.get('last_snr', 'N/D')} dB</b>\n"
+                            f"• Pacchetti RX/TX: <b>{r_stat.get('recv_packets', 0)}</b> / <b>{r_stat.get('sent_packets', 0)}</b>\n"
+                            f"• Messaggi archiviati in stanza: <b>{r_stat.get('posts_count', 0)}</b>\n"
+                            f"• Ultimo post: <i>{r_stat.get('last_post_text') or 'Nessuno'}</i>\n\n"
+                            f"💡 <i>Tutti i messaggi ricevuti dall'antenna esterna vengono archiviati automaticamente in bacheca sul Room Server.</i>\n"
+                            f"Usa <code>/room &lt;testo&gt;</code> per pubblicare un annuncio diretto.",
+                            chat_id=chat_id,
+                            message_thread_id=thread_id
+                        )
+
+                    elif text.startswith("/room"):
+                        parts = text.split(maxsplit=1)
+                        if len(parts) > 1 and parts[1].strip():
+                            post_text = parts[1].strip()
+                            from room_server import room_server_bridge
+                            room_server_bridge.post_message(f"Telegram:{sender_name}", "Room", post_text)
+                            await send_telegram(
+                                f"🏛️ <b>[Room Server Buscate]</b> Post pubblicato con successo nella bacheca della Stanza!\n"
+                                f"📝 <i>\"{post_text}\"</i>",
+                                chat_id=chat_id,
+                                message_thread_id=thread_id
+                            )
+                        else:
+                            await send_telegram(
+                                "ℹ️ <b>Uso comando /room:</b>\n"
+                                "<code>/room Ciao a tutti da Buscate!</code>\n"
+                                "Pubblica il messaggio direttamente nella bacheca del Room Server locale.",
+                                chat_id=chat_id,
+                                message_thread_id=thread_id
+                            )
+
+                    elif text.startswith("/path") or text.startswith("/percorsi"):
+                        req_limit = 20
+                        try:
+                            conn = sqlite3.connect(DB_PATH)
+                            conn.row_factory = sqlite3.Row
+                            cur = conn.cursor()
+                            cur.execute(
+                                "SELECT sender, channel, hops, snr, timestamp FROM messages WHERE source = 'LoRa Mesh' ORDER BY id DESC LIMIT ?",
+                                (req_limit,)
+                            )
+                            rows = cur.fetchall()
+                            conn.close()
+                            if not rows:
+                                await send_telegram("ℹ️ Nessun percorso memorizzato di recente.", chat_id=chat_id, message_thread_id=thread_id)
+                            else:
+                                p_lines = ["🔀 <b>ULTIMI PERCORSI DEI MESSAGGI RF</b>\n"]
+                                for r in rows:
+                                    h = decode_meshcore_hops(r["hops"])
+                                    h_txt = "🎯 Diretto RF (0 salti)" if h == 0 else (f"🔀 1 salto" if h == 1 else f"🔀 {h} salti")
+                                    s_txt = f", SNR {r['snr']:+.1f}dB" if r["snr"] is not None else ""
+                                    p_lines.append(f"• <b>{r['sender']}</b> [{r['channel']}]: {h_txt}{s_txt}")
+                                await send_telegram("\n".join(p_lines), chat_id=chat_id, message_thread_id=thread_id)
+                        except Exception as e:
+                            await send_telegram(f"❌ Errore lettura percorsi: {e}", chat_id=chat_id, message_thread_id=thread_id)
+
                     elif text.startswith("/status"):
                         status_str = "🟢 Connessa" if active_heltec_ws else "🔴 Non connessa"
                         ch_summary = ", ".join([f"[{k}] {v}" for k, v in sorted(discovered_channels.items())])
@@ -2830,9 +3852,9 @@ async def telegram_polling_loop():
                             set_node_setting("regional_scope", new_scope)
                             if active_heltec_ws:
                                 try:
-                                    await send_to_heltec(f"region default {new_scope}\r\n".encode("utf-8"))
+                                    pass  # region CLI commands are not binary companion frames
                                     await asyncio.sleep(0.05)
-                                    await send_to_heltec(b"region save\r\n")
+                                    pass  # region CLI commands are not binary companion frames
                                 except Exception:
                                     pass
                             await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
@@ -2894,10 +3916,10 @@ async def telegram_polling_loop():
                         await send_telegram(
                             "🌐 <b>MeshCore Web Client</b>\n\n"
                             "Puoi aprire la console web interattiva direttamente dal browser del telefono o PC:\n"
-                            "🔗 https://meshcore-room-bot.onrender.com/app\n\n"
+                            f"🔗 {WEB_APP_URL}\n\n"
                             "<i>Include chat in tempo reale, cambio canali con un tocco, telemetria radio e lista dei nodi ascoltati.</i>",
                             chat_id=chat_id,
-                            reply_markup={"inline_keyboard": [[{"text": "🚀 Apri Web Client", "url": "https://meshcore-room-bot.onrender.com/app"}]]},
+                            reply_markup={"inline_keyboard": [[{"text": "🚀 Apri Web Client", "url": WEB_APP_URL}]]},
                             message_thread_id=thread_id
                         )
 
@@ -2923,6 +3945,8 @@ async def telegram_polling_loop():
                                 msg_id = save_message("Telegram", sender_name, ch_name, content, ack_status="sent_to_radio", ack_nodes_count=0)
                                 frame = build_channel_send_frame(resolved, f"[{sender_name}]: {content}")
                                 sent = await send_to_heltec(frame)
+                                if sent:
+                                    asyncio.create_task(auto_retry_message(msg_id, resolved, f"[{sender_name}]: {content}", max_retries=5, interval=45))
                                 await broadcast_to_browsers({
                                     "type": "new_message",
                                     "id": msg_id,
@@ -2939,7 +3963,8 @@ async def telegram_polling_loop():
                                     "ack_nodes_count": 0
                                 })
                                 if sent:
-                                    await send_telegram(f"📡 <i>Trasmesso su [Canale {resolved}: {ch_name}] via LoRa:</i>\n\"{content}\"", chat_id=chat_id, message_thread_id=thread_id)
+                                    retry_kb = {"inline_keyboard": [[{"text": "🔄 Reinvia via Radio", "callback_data": f"resend_msg_{msg_id}"}]]}
+                                    await send_telegram(f"📡 <i>Trasmesso su [Canale {resolved}: {ch_name}] via LoRa:</i>\n\"{content}\"", chat_id=chat_id, reply_markup=retry_kb, message_thread_id=thread_id)
                                 else:
                                     await send_telegram(f"💾 Salvato nella Room locale su [{ch_name}]. (Heltec offline).", chat_id=chat_id, message_thread_id=thread_id)
 
@@ -3072,9 +4097,9 @@ async def telegram_polling_loop():
                                     set_node_setting("regional_scope", new_scope)
                                     if active_heltec_ws:
                                         try:
-                                            await send_to_heltec(f"region default {new_scope}\r\n".encode("utf-8"))
+                                            pass  # region CLI commands are not binary companion frames
                                             await asyncio.sleep(0.05)
-                                            await send_to_heltec(b"region save\r\n")
+                                            pass  # region CLI commands are not binary companion frames
                                         except Exception:
                                             pass
                                     await broadcast_to_browsers({"type": "node_info", "node_info": node_info})
@@ -3115,6 +4140,8 @@ async def telegram_polling_loop():
                         msg_id = save_message("Telegram", sender_name, target_ch_name, payload_text, ack_status="sent_to_radio", ack_nodes_count=0)
                         frame = build_channel_send_frame(target_ch_idx, f"[{sender_name}]: {payload_text}")
                         sent = await send_to_heltec(frame)
+                        if sent:
+                            asyncio.create_task(auto_retry_message(msg_id, target_ch_idx, f"[{sender_name}]: {payload_text}", max_retries=5, interval=45))
                         await broadcast_to_browsers({
                             "type": "new_message",
                             "id": msg_id,
@@ -3131,7 +4158,8 @@ async def telegram_polling_loop():
                             "ack_nodes_count": 0
                         })
                         if sent:
-                            await send_telegram(f"📡 <i>Trasmesso su [Canale {target_ch_idx}: {target_ch_name}] via LoRa:</i>\n\"{payload_text}\"", chat_id=chat_id, message_thread_id=thread_id)
+                            retry_kb = {"inline_keyboard": [[{"text": "🔄 Reinvia via Radio", "callback_data": f"resend_msg_{msg_id}"}]]}
+                            await send_telegram(f"📡 <i>Trasmesso su [Canale {target_ch_idx}: {target_ch_name}] via LoRa:</i>\n\"{payload_text}\"", chat_id=chat_id, reply_markup=retry_kb, message_thread_id=thread_id)
                         else:
                             await send_telegram(f"💾 Salvato nella Room locale [{target_ch_name}]. (Heltec offline, non trasmesso via radio).", chat_id=chat_id, message_thread_id=thread_id)
 

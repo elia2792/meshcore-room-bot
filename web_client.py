@@ -21,6 +21,8 @@ def get_web_client_html() -> str:
     <!-- Leaflet CSS & JS for Interactive LoRa Map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Chart.js for RF Propagation & Traffic Analytics -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg: #090d16;
@@ -456,6 +458,155 @@ def get_web_client_html() -> str:
             color: #fff;
         }
 
+                /* Split Layout: Chat + Mailbox Side-by-Side */
+        .chat-layout-split {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .chat-main-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .mailbox-side-panel {
+            width: 320px;
+            background: var(--surface-card);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+            box-sizing: border-box;
+            z-index: 10;
+            transition: transform 0.25s ease;
+        }
+
+        .mailbox-panel-header {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .mailbox-panel-title {
+            font-size: 0.86rem;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .mailbox-badge {
+            background: #f59e0b;
+            color: #000;
+            font-size: 0.68rem;
+            font-weight: 800;
+            padding: 1px 6px;
+            border-radius: 10px;
+        }
+
+        .mailbox-section {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .mailbox-section-title {
+            font-size: 0.74rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            font-weight: 700;
+            margin-bottom: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .favorites-chips-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            max-height: 105px;
+            overflow-y: auto;
+        }
+
+        .fav-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(245, 158, 11, 0.12);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 14px;
+            padding: 2px 8px;
+            font-size: 0.74rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .fav-chip:hover {
+            background: rgba(245, 158, 11, 0.25);
+            transform: scale(1.03);
+        }
+
+        .mailbox-items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            overflow-y: auto;
+            max-height: 220px;
+        }
+
+        .mailbox-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            padding: 7px 9px;
+            font-size: 0.76rem;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .mailbox-card.pending {
+            border-left: 3px solid #f59e0b;
+        }
+        .mailbox-card.delivered {
+            border-left: 3px solid #10b981;
+            opacity: 0.75;
+        }
+
+        .mailbox-compose-box {
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.25);
+            border-bottom: 1px solid var(--border);
+        }
+
+        @media (max-width: 900px) {
+            .mailbox-side-panel {
+                position: absolute;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                width: 290px;
+                box-shadow: -6px 0 20px rgba(0, 0, 0, 0.65);
+                transform: translateX(105%);
+            }
+            .mailbox-side-panel.open {
+                transform: translateX(0);
+            }
+        }
+
         .chat-messages-scroll {
             flex: 1;
             padding: 14px 16px;
@@ -591,6 +742,27 @@ def get_web_client_html() -> str:
             border: 1px solid rgba(16, 185, 129, 0.4);
             box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
             animation: pulseRecapito 1.2s ease-out;
+        }
+
+        .btn-resend-msg {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(239, 68, 68, 0.12);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            border-radius: 6px;
+            padding: 1px 7px;
+            font-size: 0.82rem;
+            cursor: pointer;
+            margin-left: 6px;
+            line-height: 1.2;
+            transition: all 0.2s ease;
+        }
+        .btn-resend-msg:hover {
+            background: rgba(239, 68, 68, 0.25);
+            border-color: #ef4444;
+            transform: scale(1.15) rotate(-35deg);
         }
 
         @keyframes pulseRecapito {
@@ -1520,6 +1692,8 @@ def get_web_client_html() -> str:
             </div>
         </div>
         <div class="header-actions">
+            <button id="roomServerBtn" class="btn-icon" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35);" title="Room Server Buscate-Room (Heltec #2 USB)" onclick="openRoomServerModal()">🏛️ Stanza</button>
+            <button id="statsToggleBtn" class="btn-icon" title="Statistiche & Propagazione RF 24h" onclick="openStatsModal()">📊 Statistiche</button>
             <button id="notifToggleBtn" class="btn-icon" title="Attiva Notifiche Push Browser" onclick="togglePushNotifications()">📲 App</button>
             <button id="audioToggleBtn" class="btn-icon" title="Attiva/Disattiva Suoni">🔔</button>
             <a href="https://t.me/Meshcoreeliaxs_bot" target="_blank" class="btn-icon" title="Apri Telegram">✈️ Telegram</a>
@@ -1536,52 +1710,113 @@ def get_web_client_html() -> str:
                 <!-- Dynamically filled -->
             </div>
 
-            <!-- Live Message Search Bar -->
-            <div class="chat-search-bar" id="chatSearchBar">
-                <span style="font-size:0.85rem; color:var(--text-dim);">🔍</span>
-                <input type="text" id="chatSearchInput" placeholder="Cerca parole o nominativi nei messaggi..." oninput="handleChatSearch()" autocomplete="off"/>
-                <button id="clearSearchBtn" class="clear-search-btn" onclick="clearChatSearch()" style="display:none;" title="Azzera ricerca">✕</button>
-            </div>
+            <!-- Split Layout: Chat a sinistra, Messaggi da Recapitare & Preferiti a fianco -->
+            <div class="chat-layout-split">
 
-            <!-- Messages Log -->
-            <div id="chatMessagesScroll" class="chat-messages-scroll">
-                <div class="chat-date-separator">
-                    <span>Oggi</span>
-                </div>
-                <!-- Chat bubbles dynamically filled -->
-            </div>
-
-            <!-- Input Bar -->
-            <div class="chat-input-container">
-                <!-- Reply Bar -->
-                <div id="replyBar" class="reply-bar" style="display: none;">
-                    <div class="reply-bar-left">
-                        <div class="reply-bar-title">↩️ Rispondi a <span id="replyToSender"></span></div>
-                        <div id="replyToSnippet" class="reply-bar-snippet"></div>
+                <!-- Colonna Sinistra: Chat Principale -->
+                <div class="chat-main-column">
+                    <!-- Live Message Search Bar -->
+                    <div class="chat-search-bar" id="chatSearchBar">
+                        <span style="font-size:0.85rem; color:var(--text-dim);">🔍</span>
+                        <input type="text" id="chatSearchInput" placeholder="Cerca parole o nominativi nei messaggi..." oninput="handleChatSearch()" autocomplete="off"/>
+                        <button id="clearSearchBtn" class="clear-search-btn" onclick="clearChatSearch()" style="display:none;" title="Azzera ricerca">✕</button>
                     </div>
-                    <button id="cancelReplyBtn" class="reply-bar-close" title="Annulla risposta">✕</button>
-                </div>
 
-                <!-- 1-Tap Fast Transmit Macro Strip -->
-                <div class="macro-bar">
-                    <button class="macro-btn" type="button" onclick="sendQuickMacro('👋 Ciao a tutti!')">👋 Ciao</button>
-                    <button class="macro-btn" type="button" onclick="sendQuickMacro('📶 73 de Buscate')">📶 73 de Buscate</button>
-                    <button class="macro-btn" type="button" onclick="sendQuickMacro('📡 Test RF / !ping')">📡 !ping</button>
-                    <button class="macro-btn" type="button" onclick="sendQuickMacro('📍 QRV (In ascolto)')">📍 QRV</button>
-                    <button class="macro-btn" type="button" onclick="sendQuickMacro('⚠️ SOS / Emergenza')">⚠️ SOS</button>
-                </div>
+                    <!-- Messages Log -->
+                    <div id="chatMessagesScroll" class="chat-messages-scroll">
+                        <div class="chat-date-separator">
+                            <span>Oggi</span>
+                        </div>
+                        <!-- Chat bubbles dynamically filled -->
+                    </div>
 
-                <div class="chat-input-row">
-                    <input type="text" id="messageInput" placeholder="Scrivi un messaggio LoRa..." autocomplete="off" />
-                    <button id="sendBtn" class="btn-send" title="Trasmetti messaggio via radio">➤</button>
-                </div>
-                <div class="chat-tools-row">
-                    <span>Canale: <b id="currentChannelName" style="color: var(--primary);">Public [0]</b></span>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <button id="shareLocationBtn" class="btn-icon" style="padding:2px 8px; font-size:0.75rem; color:var(--accent-blue);" onclick="shareGpsLocationInChat()" title="Invia coordinate GPS correnti nel canale LoRa">📍 Invia GPS</button>
-                        <span>Operatore: <input type="text" id="senderNameInput" value="Web-Operatore" style="background:transparent; border:none; color:var(--accent-blue); font-weight:600; width:110px; text-align:right;" /></span>
+                    <!-- Input Bar -->
+                    <div class="chat-input-container">
+                        <!-- Reply Bar -->
+                        <div id="replyBar" class="reply-bar" style="display: none;">
+                            <div class="reply-bar-left">
+                                <div class="reply-bar-title">↩️ Rispondi a <span id="replyToSender"></span></div>
+                                <div id="replyToSnippet" class="reply-bar-snippet"></div>
+                            </div>
+                            <button id="cancelReplyBtn" class="reply-bar-close" title="Annulla risposta">✕</button>
+                        </div>
+
+                        <!-- 1-Tap Fast Transmit Macro Strip -->
+                        <div class="macro-bar">
+                            <button class="macro-btn" type="button" onclick="sendQuickMacro('👋 Ciao a tutti!')">👋 Ciao</button>
+                            <button class="macro-btn" type="button" onclick="sendQuickMacro('📶 73 de Buscate')">📶 73 de Buscate</button>
+                            <button class="macro-btn" type="button" onclick="sendQuickMacro('📡 Test RF / !ping')">📡 !ping</button>
+                            <button class="macro-btn" type="button" onclick="sendQuickMacro('📍 QRV (In ascolto)')">📍 QRV</button>
+                            <button class="macro-btn" type="button" onclick="sendQuickMacro('⚠️ SOS / Emergenza')">⚠️ SOS</button>
+                        </div>
+
+                        <div class="chat-input-row">
+                            <input type="text" id="messageInput" placeholder="Scrivi un messaggio LoRa..." autocomplete="off" />
+                            <button id="sendBtn" class="btn-send" title="Trasmetti messaggio via radio">➤</button>
+                        </div>
+                        <div class="chat-tools-row">
+                            <span>Canale: <b id="currentChannelName" style="color: var(--primary);">Public [0]</b></span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <button id="shareLocationBtn" class="btn-icon" style="padding:2px 8px; font-size:0.75rem; color:var(--accent-blue);" onclick="shareGpsLocationInChat()" title="Invia coordinate GPS correnti nel canale LoRa">📍 Invia GPS</button>
+                                <button id="toggleMailboxBtn" class="btn-icon" style="padding:2px 8px; font-size:0.75rem; color:#f59e0b; display:flex; align-items:center; gap:4px;" onclick="toggleMailboxPanel()" title="Apri casella messaggi da recapitare">📬 Da Recapitare <span id="mailboxBadgeChat" class="mailbox-badge" style="font-size:0.65rem;">0</span></button>
+                            </div>
+                        </div>
                     </div>
                 </div>
+
+                <!-- Colonna Destra: Messaggi da Recapitare & Preferiti (Affiancata) -->
+                <div id="mailboxSidePanel" class="mailbox-side-panel">
+                    <div class="mailbox-panel-header">
+                        <div class="mailbox-panel-title">
+                            <span>📬 Da Recapitare</span>
+                            <span id="mailboxBadgePanel" class="mailbox-badge">0</span>
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <button class="btn-icon" style="font-size:0.75rem; padding:2px 7px; color:#f59e0b;" onclick="toggleMailboxCompose()" title="Lascia messaggio per un nodo">➕ Lascia</button>
+                            <button class="btn-icon" style="font-size:0.75rem; padding:2px 6px;" onclick="toggleMailboxPanel()" title="Chiudi pannello">✕</button>
+                        </div>
+                    </div>
+
+                    <!-- Sezione Preferiti -->
+                    <div class="mailbox-section">
+                        <div class="mailbox-section-title">
+                            <span>⭐ Nodi Preferiti</span>
+                            <button class="btn-icon" style="font-size:0.7rem; padding:1px 5px;" onclick="promptAddFavorite()" title="Aggiungi nominativo ai preferiti">➕ Add</button>
+                        </div>
+                        <div id="favoritesListContainer" class="favorites-chips-container">
+                            <span style="font-size:0.72rem; color:var(--text-dim);">Nessun preferito salvato</span>
+                        </div>
+                    </div>
+
+                    <!-- Box Lascia Messaggio Differito (Collassabile) -->
+                    <div id="mailboxComposeBox" class="mailbox-compose-box" style="display:none;">
+                        <div style="font-size:0.74rem; font-weight:700; color:var(--text-main); margin-bottom:5px;">✍️ Lascia Messaggio Off-Grid:</div>
+                        <input type="text" id="mbTargetInput" class="form-control" placeholder="Destinatario (es. IW1AWF)" style="margin-bottom:5px; font-size:0.78rem; padding:4px 8px;" />
+                        <textarea id="mbContentInput" class="form-control" rows="2" placeholder="Testo da recapitare appena ascoltato..." style="margin-bottom:6px; font-size:0.78rem; padding:4px 8px; resize:none;"></textarea>
+                        <div style="display:flex; gap:6px;">
+                            <button class="btn-action" style="flex:1; padding:3px 8px; font-size:0.74rem;" onclick="submitMailboxMessage()">💾 Metti in Coda</button>
+                            <button class="btn-action btn-secondary" style="padding:3px 8px; font-size:0.74rem;" onclick="toggleMailboxCompose()">Annulla</button>
+                        </div>
+                    </div>
+
+                    <!-- Sezione Lista Messaggi in Coda & Consegnati -->
+                    <div class="mailbox-section" style="flex:1; overflow-y:auto; display:flex; flex-direction:column;">
+                        <div class="mailbox-section-title">
+                            <span>⏳ In Coda Radio</span>
+                        </div>
+                        <div id="mailboxPendingList" class="mailbox-items-list">
+                            <span style="font-size:0.72rem; color:var(--text-dim); text-align:center; padding:10px;">Nessun messaggio in attesa</span>
+                        </div>
+
+                        <div class="mailbox-section-title" style="margin-top:10px;">
+                            <span>✅ Consegnati Recenti</span>
+                        </div>
+                        <div id="mailboxDeliveredList" class="mailbox-items-list">
+                            <span style="font-size:0.72rem; color:var(--text-dim); text-align:center; padding:6px;">Nessun messaggio recente</span>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -2039,7 +2274,606 @@ def get_web_client_html() -> str:
         </div>
     </div>
 
+    <!-- Modal Popup for 24h RF Propagation & Traffic Stats -->
+    <!-- Modal Popup for Room Server Bridge (Heltec #2 USB) -->
+    <div id="roomServerModalOverlay" class="modal-overlay">
+        <div class="modal-dialog" style="max-width: 600px;">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span>🏛️</span>
+                    <span>Room Server Stanza Buscate (Heltec #2 USB)</span>
+                </div>
+                <button class="modal-close-btn" onclick="closeRoomServerModal()" title="Chiudi popup">✕</button>
+            </div>
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:14px; max-height:75vh; overflow-y:auto;">
+                <!-- Status Row -->
+                <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:12px;">
+                    <div>
+                        <div style="font-size:0.95rem; font-weight:700; color:var(--text-main);">
+                            <span id="rsName">Buscate-Room</span>
+                        </div>
+                        <div style="font-size:0.75rem; color:var(--text-dim); margin-top:2px;">
+                            Hardware: ESP32-S3 Heltec V3 • Porta: <code id="rsPort">/dev/ttyUSB0</code>
+                        </div>
+                    </div>
+                    <span id="rsConnBadge" class="status-badge online">🟢 ATTIVO</span>
+                </div>
+
+                <!-- KPI Grid -->
+                <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;">
+                        <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Batteria</div>
+                        <div id="rsBattery" style="font-size:1.15rem; font-weight:800; color:#10b981;">-- V</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;">
+                        <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Uptime</div>
+                        <div id="rsUptime" style="font-size:1.15rem; font-weight:800; color:#38bdf8;">-- min</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;">
+                        <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Post in Bacheca</div>
+                        <div id="rsPostsCount" style="font-size:1.15rem; font-weight:800; color:#c084fc;">--</div>
+                    </div>
+                </div>
+
+                <!-- RF Radio Info -->
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:12px;">
+                    <div style="font-size:0.8rem; font-weight:700; margin-bottom:6px; color:var(--text-main);">📡 Parametri Radio LoRa</div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.78rem; color:var(--text-dim);">
+                        <span>Frequenza: <strong id="rsFreq" style="color:var(--text-main);">869.618 MHz</strong></span>
+                        <span>Noise Floor: <strong id="rsNoise" style="color:var(--text-main);">-- dBm</strong></span>
+                        <span>Ultimo RSSI/SNR: <strong id="rsRssiSnr" style="color:var(--text-main);">-- / --</strong></span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--text-dim); margin-top:6px;">
+                        <span>Pacchetti Ricevuti: <strong id="rsRecv">--</strong></span>
+                        <span>Pacchetti Trasmessi: <strong id="rsSent">--</strong></span>
+                    </div>
+                </div>
+
+                <!-- Bridge explanation -->
+                <div style="font-size:0.76rem; color:var(--text-dim); background:rgba(56, 189, 248, 0.05); border:1px solid rgba(56, 189, 248, 0.2); border-radius:8px; padding:10px; line-height:1.4;">
+                    ℹ️ <strong>Ponte Software Attivo:</strong> Tutti i messaggi catturati dall'antenna esterna sul tetto (Heltec #1) vengono archiviati istantaneamente nella bacheca del Room Server via USB. Chiunque si connetta alla stanza via radio o BLE può consultare l'intero storico.
+                </div>
+
+                <!-- Last Post Display -->
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:10px;">
+                    <div style="font-size:0.75rem; color:var(--text-dim); margin-bottom:4px;">Ultimo Messaggio Archiviato:</div>
+                    <div id="rsLastPost" style="font-size:0.82rem; font-style:italic; color:var(--text-main);">Nessuno</div>
+                    <div id="rsLastPostTime" style="font-size:0.7rem; color:var(--text-dim); margin-top:2px;">--</div>
+                </div>
+
+                <!-- Direct Post Form -->
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                    <div style="font-size:0.8rem; font-weight:700; color:var(--text-main);">📝 Pubblica Annuncio Diretto in Bacheca</div>
+                    <div style="display:flex; gap:8px;">
+                        <input id="rsDirectPostInput" type="text" placeholder="Scrivi un annuncio per la Room..." style="flex:1; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:6px; padding:8px 12px; color:var(--text-main); font-size:0.82rem;" onkeydown="if(event.key==='Enter') sendRoomPostDirect();">
+                        <button class="btn-action btn-primary" onclick="sendRoomPostDirect()" style="padding:6px 14px; font-size:0.8rem;">Pubblica</button>
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:4px;">
+                    <button class="btn-action btn-secondary" onclick="syncRoomServerClock()" style="font-size:0.75rem; padding:6px 12px;" title="Sincronizza orologio della scheda con l'orario del Pi">⏱️ Sincronizza Ora</button>
+                    <button class="btn-action btn-secondary" onclick="sendRoomServerAdvert()" style="font-size:0.75rem; padding:6px 12px;" title="Invia annuncio beacon Zero-Hop nell'etere">📡 Invia Beacon Advert</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span id="rsLastSync" style="font-size:0.72rem; color:var(--text-dim);">Aggiornamento live ogni 10s.</span>
+                <button class="btn-action btn-secondary" onclick="closeRoomServerModal()" style="padding: 5px 14px; font-size: 0.8rem;">Chiudi</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="statsModalOverlay" class="modal-overlay">
+        <div class="modal-dialog" style="max-width: 650px;">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <span>📊</span>
+                    <span>Analisi RF & Propagazione (Ultime 24 Ore)</span>
+                </div>
+                <button class="modal-close-btn" onclick="closeStatsModal()" title="Chiudi popup">✕</button>
+            </div>
+            <div class="modal-body" style="display:flex; flex-direction:column; gap:16px; max-height:75vh; overflow-y:auto;">
+                <!-- Summary KPI Row -->
+                <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;">
+                        <div style="font-size:0.72rem; color:var(--text-dim); text-transform:uppercase;">Pacchetti 24h</div>
+                        <div id="statTotalPkt" style="font-size:1.25rem; font-weight:800; color:#38bdf8;">--</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;">
+                        <div style="font-size:0.72rem; color:var(--text-dim); text-transform:uppercase;">SNR Medio 24h</div>
+                        <div id="statAvgSnr" style="font-size:1.25rem; font-weight:800; color:#10b981;">-- dB</div>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border); border-radius:8px; padding:10px; text-align:center;">
+                        <div style="font-size:0.72rem; color:var(--text-dim); text-transform:uppercase;">Canale Top</div>
+                        <div id="statTopChannel" style="font-size:1.1rem; font-weight:800; color:#f59e0b;">Public</div>
+                    </div>
+                </div>
+
+                <!-- Chart 1: Hourly Activity & SNR Trend -->
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:12px;">
+                    <div style="font-size:0.8rem; font-weight:700; margin-bottom:8px; color:var(--text-main);">📈 Attività Oraria & Trend SNR (dB)</div>
+                    <div style="position:relative; height:180px;">
+                        <canvas id="chartHourlyCanvas"></canvas>
+                    </div>
+                </div>
+
+                <!-- Chart 2: Top Senders -->
+                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:8px; padding:12px;">
+                    <div style="font-size:0.8rem; font-weight:700; margin-bottom:8px; color:var(--text-main);">🏆 Top 10 Nodi Più Ascoltati (24h)</div>
+                    <div style="position:relative; height:180px;">
+                        <canvas id="chartTopSendersCanvas"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span style="font-size:0.72rem; color:var(--text-dim);">Dati aggregati in tempo reale dal database SQLite.</span>
+                <button class="btn-action btn-secondary" onclick="closeStatsModal()" style="padding: 5px 14px; font-size: 0.8rem;">Chiudi</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // State for Mailbox & Favorites
+        let favoriteNodesList = [];
+        let mailboxPendingList = [];
+        let mailboxDeliveredList = [];
+        let chartHourlyInstance = null;
+        let chartTopSendersInstance = null;
+
+        function toggleMailboxPanel() {
+            const panel = document.getElementById("mailboxSidePanel");
+            if (panel) {
+                panel.classList.toggle("open");
+            }
+        }
+
+        function toggleMailboxCompose() {
+            const box = document.getElementById("mailboxComposeBox");
+            if (!box) return;
+            box.style.display = (box.style.display === "none" || !box.style.display) ? "block" : "none";
+            if (box.style.display === "block") {
+                const targetInput = document.getElementById("mbTargetInput");
+                if (targetInput) targetInput.focus();
+            }
+        }
+
+        function openMailboxForNode(nodeName) {
+            const panel = document.getElementById("mailboxSidePanel");
+            if (panel && !panel.classList.contains("open")) {
+                panel.classList.add("open");
+            }
+            const box = document.getElementById("mailboxComposeBox");
+            if (box) box.style.display = "block";
+            const targetInput = document.getElementById("mbTargetInput");
+            if (targetInput) {
+                targetInput.value = nodeName;
+                const contentInput = document.getElementById("mbContentInput");
+                if (contentInput) contentInput.focus();
+            }
+        }
+
+        async function loadFavorites() {
+            try {
+                const res = await fetch("/api/favorites");
+                const data = await res.json();
+                favoriteNodesList = (data.favorites || []).map(f => f.node_name);
+                renderFavorites();
+            } catch (e) {
+                console.error("Errore loadFavorites:", e);
+            }
+        }
+
+        function renderFavorites() {
+            const container = document.getElementById("favoritesListContainer");
+            if (!container) return;
+            container.innerHTML = "";
+            if (favoriteNodesList.length === 0) {
+                container.innerHTML = `<span style="font-size:0.72rem; color:var(--text-dim);">Nessun preferito salvato. Clicca ⭐ sui nodi o usa Add.</span>`;
+                return;
+            }
+            favoriteNodesList.forEach(name => {
+                const chip = document.createElement("span");
+                chip.className = "fav-chip";
+                chip.innerHTML = `⭐ ${escapeHtml(name)} <span style="opacity:0.6; margin-left:3px;" onclick="event.stopPropagation(); removeFavoriteNode('${escapeJsString(name)}')">✕</span>`;
+                chip.onclick = () => openMailboxForNode(name);
+                chip.title = `Clicca per lasciare un messaggio differito a ${name}`;
+                container.appendChild(chip);
+            });
+        }
+
+        async function promptAddFavorite() {
+            const name = prompt("Inserisci il nominativo o nome del nodo da aggiungere ai preferiti:");
+            if (name && name.trim()) {
+                await addFavoriteNode(name.trim());
+            }
+        }
+
+        async function addFavoriteNode(name) {
+            try {
+                await fetch("/api/favorites", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ node_name: name })
+                });
+                showToast(`⭐ ${name} aggiunto ai preferiti!`, true);
+                loadFavorites();
+            } catch (e) {
+                showToast("Errore aggiunta preferito", false);
+            }
+        }
+
+        async function removeFavoriteNode(name) {
+            try {
+                await fetch(`/api/favorites/${encodeURIComponent(name)}`, { method: "DELETE" });
+                showToast(`Rimosso ${name} dai preferiti`, true);
+                loadFavorites();
+            } catch (e) {
+                showToast("Errore rimozione preferito", false);
+            }
+        }
+
+        async function toggleFavoriteNode(name) {
+            if (favoriteNodesList.includes(name)) {
+                await removeFavoriteNode(name);
+            } else {
+                await addFavoriteNode(name);
+            }
+            renderNodes();
+        }
+
+        function isFavorite(name) {
+            return favoriteNodesList.includes(name);
+        }
+
+        async function loadMailbox() {
+            try {
+                const res = await fetch("/api/mailbox");
+                const data = await res.json();
+                mailboxPendingList = data.pending || [];
+                mailboxDeliveredList = data.delivered || [];
+                renderMailbox();
+            } catch (e) {
+                console.error("Errore loadMailbox:", e);
+            }
+        }
+
+        function renderMailbox() {
+            const pendingContainer = document.getElementById("mailboxPendingList");
+            const deliveredContainer = document.getElementById("mailboxDeliveredList");
+            const badgePanel = document.getElementById("mailboxBadgePanel");
+            const badgeChat = document.getElementById("mailboxBadgeChat");
+
+            const count = mailboxPendingList.length;
+            if (badgePanel) badgePanel.textContent = count;
+            if (badgeChat) badgeChat.textContent = count;
+
+            if (pendingContainer) {
+                pendingContainer.innerHTML = "";
+                if (mailboxPendingList.length === 0) {
+                    pendingContainer.innerHTML = `<span style="font-size:0.72rem; color:var(--text-dim); text-align:center; padding:10px;">Nessun messaggio in attesa di segnale radio.</span>`;
+                } else {
+                    mailboxPendingList.forEach(m => {
+                        const card = document.createElement("div");
+                        card.className = "mailbox-card pending";
+                        const time = m.created_at ? m.created_at.substring(11, 16) : "";
+                        card.innerHTML = `
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <b style="color:#fbbf24;">A: @${escapeHtml(m.target_node)}</b>
+                                <span style="font-size:0.68rem; color:var(--text-dim);">${time}</span>
+                            </div>
+                            <div style="color:var(--text-main); font-size:0.75rem; word-break:break-word;">${escapeHtml(m.content)}</div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:3px;">
+                                <span style="font-size:0.68rem; color:#f59e0b;">⏳ In attesa segnale...</span>
+                                <div style="display:flex; gap:4px;">
+                                    <button class="btn-icon" style="padding:1px 5px; font-size:0.68rem; color:#10b981;" onclick="sendMailboxNow(${m.id})" title="Forza invio via radio ora">🚀 Invia</button>
+                                    <button class="btn-icon" style="padding:1px 5px; font-size:0.68rem; color:#ef4444;" onclick="deleteMailboxMessage(${m.id})" title="Annulla messaggio">🗑️</button>
+                                </div>
+                            </div>
+                        `;
+                        pendingContainer.appendChild(card);
+                    });
+                }
+            }
+
+            if (deliveredContainer) {
+                deliveredContainer.innerHTML = "";
+                if (mailboxDeliveredList.length === 0) {
+                    deliveredContainer.innerHTML = `<span style="font-size:0.72rem; color:var(--text-dim); text-align:center; padding:6px;">Nessun messaggio recapitato di recente.</span>`;
+                } else {
+                    mailboxDeliveredList.forEach(m => {
+                        const card = document.createElement("div");
+                        card.className = "mailbox-card delivered";
+                        const dTime = m.delivered_at ? m.delivered_at.substring(11, 16) : "";
+                        card.innerHTML = `
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <b style="color:#10b981;">✓ A: @${escapeHtml(m.target_node)}</b>
+                                <span style="font-size:0.68rem; color:var(--text-dim);">${dTime}</span>
+                            </div>
+                            <div style="color:var(--text-dim); font-size:0.73rem; word-break:break-word;">${escapeHtml(m.content)}</div>
+                        `;
+                        deliveredContainer.appendChild(card);
+                    });
+                }
+            }
+        }
+
+        async function submitMailboxMessage() {
+            const targetInput = document.getElementById("mbTargetInput");
+            const contentInput = document.getElementById("mbContentInput");
+            const target = (targetInput ? targetInput.value : "").trim();
+            const content = (contentInput ? contentInput.value : "").trim();
+            if (!target || !content) {
+                showToast("Inserisci destinatario e messaggio", false);
+                return;
+            }
+            try {
+                const res = await fetch("/api/mailbox", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        target_node: target,
+                        content: content,
+                        channel_idx: activeChannelIdx >= 0 ? activeChannelIdx : 0
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(`📬 Messaggio in coda per @${target}!`, true);
+                    if (contentInput) contentInput.value = "";
+                    toggleMailboxCompose();
+                    loadMailbox();
+                } else {
+                    showToast("Errore salvataggio", false);
+                }
+            } catch (e) {
+                showToast("Errore di rete", false);
+            }
+        }
+
+        async function deleteMailboxMessage(id) {
+            try {
+                await fetch(`/api/mailbox/${id}`, { method: "DELETE" });
+                showToast("Messaggio rimosso dalla casella", true);
+                loadMailbox();
+            } catch (e) {
+                showToast("Errore cancellazione", false);
+            }
+        }
+
+        async function sendMailboxNow(id) {
+            try {
+                showToast("🚀 Trasmissione messaggio via radio...", true);
+                const res = await fetch(`/api/mailbox/${id}/send_now`, { method: "POST" });
+                const data = await res.json();
+                if (data.success) {
+                    showToast("✓ Messaggio trasmesso via LoRa!", true);
+                    loadMailbox();
+                } else {
+                    showToast("Errore trasmissione", false);
+                }
+            } catch (e) {
+                showToast("Errore di rete", false);
+            }
+        }
+
+        // Stats Modal & Chart.js Handling
+        let rsPollTimer = null;
+
+        async function openRoomServerModal() {
+            const modal = document.getElementById("roomServerModalOverlay");
+            if (modal) modal.classList.add("active");
+            await refreshRoomServerStats();
+            if (rsPollTimer) clearInterval(rsPollTimer);
+            rsPollTimer = setInterval(refreshRoomServerStats, 10000);
+        }
+
+        function closeRoomServerModal() {
+            const modal = document.getElementById("roomServerModalOverlay");
+            if (modal) modal.classList.remove("active");
+            if (rsPollTimer) {
+                clearInterval(rsPollTimer);
+                rsPollTimer = null;
+            }
+        }
+
+        async function refreshRoomServerStats() {
+            try {
+                const resp = await fetch("/api/room_server");
+                if (!resp.ok) return;
+                const d = await resp.json();
+                
+                if (document.getElementById("rsName")) document.getElementById("rsName").textContent = d.name || "Buscate-Room";
+                if (document.getElementById("rsPort")) document.getElementById("rsPort").textContent = d.port || "/dev/ttyUSB0";
+                
+                const badge = document.getElementById("rsConnBadge");
+                if (badge) {
+                    if (d.connected) {
+                        badge.className = "status-badge online";
+                        badge.textContent = "🟢 ATTIVO";
+                    } else {
+                        badge.className = "status-badge offline";
+                        badge.textContent = "🔴 NON CONNESSO";
+                    }
+                }
+                
+                if (document.getElementById("rsBattery")) document.getElementById("rsBattery").textContent = d.battery_mv ? (d.battery_mv / 1000.0).toFixed(2) + " V" : "-- V";
+                if (document.getElementById("rsUptime")) document.getElementById("rsUptime").textContent = d.uptime_secs != null ? Math.round(d.uptime_secs / 60) + " min" : "-- min";
+                if (document.getElementById("rsPostsCount")) document.getElementById("rsPostsCount").textContent = d.posts_count != null ? d.posts_count : "--";
+                
+                if (document.getElementById("rsFreq")) document.getElementById("rsFreq").textContent = (d.freq_mhz || 869.618) + " MHz";
+                if (document.getElementById("rsNoise")) document.getElementById("rsNoise").textContent = d.noise_floor != null ? d.noise_floor + " dBm" : "-- dBm";
+                
+                const rssiStr = d.last_rssi != null ? d.last_rssi + " dBm" : "--";
+                const snrStr = d.last_snr != null ? d.last_snr + " dB" : "--";
+                if (document.getElementById("rsRssiSnr")) document.getElementById("rsRssiSnr").textContent = `${rssiStr} / ${snrStr}`;
+                
+                if (document.getElementById("rsRecv")) document.getElementById("rsRecv").textContent = d.recv_packets != null ? d.recv_packets : "--";
+                if (document.getElementById("rsSent")) document.getElementById("rsSent").textContent = d.sent_packets != null ? d.sent_packets : "--";
+                
+                if (d.last_post_text && document.getElementById("rsLastPost")) {
+                    document.getElementById("rsLastPost").textContent = d.last_post_text;
+                    if (document.getElementById("rsLastPostTime")) document.getElementById("rsLastPostTime").textContent = d.last_post_time || "";
+                }
+                
+                if (d.last_stats_update && document.getElementById("rsLastSync")) {
+                    document.getElementById("rsLastSync").textContent = "Ultimo sync: " + d.last_stats_update;
+                }
+            } catch (e) {
+                console.warn("Errore aggiornamento room server stats:", e);
+            }
+        }
+
+        async function sendRoomPostDirect() {
+            const input = document.getElementById("rsDirectPostInput");
+            const text = input ? input.value.trim() : "";
+            if (!text) return;
+            try {
+                const resp = await fetch("/api/room_server/post", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: text, sender: "Web Operatore", channel: "Room" })
+                });
+                if (resp.ok) {
+                    input.value = "";
+                    showToast("✅ Messaggio archiviato nella bacheca del Room Server!", true);
+                    await refreshRoomServerStats();
+                } else {
+                    showToast("❌ Errore durante l'invio al Room Server", false);
+                }
+            } catch (e) {
+                showToast("❌ Errore di rete: " + e, false);
+            }
+        }
+
+        async function syncRoomServerClock() {
+            try {
+                const resp = await fetch("/api/room_server/sync_time", { method: "POST" });
+                if (resp.ok) {
+                    showToast("⏱️ Orologio Room Server sincronizzato con successo!", true);
+                    await refreshRoomServerStats();
+                }
+            } catch (e) {
+                showToast("❌ Errore sync ora: " + e, false);
+            }
+        }
+
+        async function sendRoomServerAdvert() {
+            try {
+                const resp = await fetch("/api/room_server/advert", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zerohop: true }) });
+                if (resp.ok) {
+                    showToast("📡 Beacon Zero-Hop trasmesso dalla Room!", true);
+                    await refreshRoomServerStats();
+                }
+            } catch (e) {
+                showToast("❌ Errore advert: " + e, false);
+            }
+        }
+
+        async function openStatsModal() {
+            const modal = document.getElementById("statsModalOverlay");
+            if (modal) modal.classList.add("active");
+            try {
+                const res = await fetch("/api/stats/rf_24h");
+                const data = await res.json();
+                renderStatsCharts(data);
+            } catch (e) {
+                console.error("Errore caricamento statistiche:", e);
+            }
+        }
+
+        function closeStatsModal() {
+            const modal = document.getElementById("statsModalOverlay");
+            if (modal) modal.classList.remove("active");
+        }
+
+        function renderStatsCharts(data) {
+            if (!data || typeof Chart === "undefined") return;
+
+            // Summary KPIs
+            const totalPkt = (data.hourly || []).reduce((acc, h) => acc + (h.count || 0), 0);
+            const validSnrs = (data.hourly || []).filter(h => h.avg_snr !== null);
+            const avgSnr = validSnrs.length ? (validSnrs.reduce((a, b) => a + b.avg_snr, 0) / validSnrs.length).toFixed(1) : "N/A";
+            const topCh = (data.channels && data.channels.length) ? data.channels[0].channel : "Public";
+
+            const totEl = document.getElementById("statTotalPkt");
+            const snrEl = document.getElementById("statAvgSnr");
+            const chEl = document.getElementById("statTopChannel");
+            if (totEl) totEl.textContent = totalPkt;
+            if (snrEl) snrEl.textContent = `${avgSnr} dB`;
+            if (chEl) chEl.textContent = topCh;
+
+            // Chart 1: Hourly packets & SNR
+            const hLabels = (data.hourly || []).map(h => h.hour);
+            const hCounts = (data.hourly || []).map(h => h.count);
+            const hSnrs = (data.hourly || []).map(h => h.avg_snr);
+
+            const canvasH = document.getElementById("chartHourlyCanvas");
+            if (canvasH) {
+                if (chartHourlyInstance) chartHourlyInstance.destroy();
+                chartHourlyInstance = new Chart(canvasH, {
+                    type: "bar",
+                    data: {
+                        labels: hLabels,
+                        datasets: [
+                            {
+                                label: "Pacchetti/ora",
+                                data: hCounts,
+                                backgroundColor: "rgba(56, 189, 248, 0.5)",
+                                borderColor: "#38bdf8",
+                                borderWidth: 1,
+                                yAxisID: "y"
+                            },
+                            {
+                                label: "SNR medio (dB)",
+                                data: hSnrs,
+                                type: "line",
+                                borderColor: "#10b981",
+                                backgroundColor: "rgba(16, 185, 129, 0.15)",
+                                tension: 0.3,
+                                yAxisID: "y1"
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: { position: "left", title: { display: true, text: "Pacchetti" } },
+                            y1: { position: "right", title: { display: true, text: "SNR (dB)" }, grid: { drawOnChartArea: false } }
+                        }
+                    }
+                });
+            }
+
+            // Chart 2: Top Senders
+            const topLabels = (data.top_senders || []).map(s => s.sender);
+            const topCounts = (data.top_senders || []).map(s => s.count);
+
+            const canvasS = document.getElementById("chartTopSendersCanvas");
+            if (canvasS) {
+                if (chartTopSendersInstance) chartTopSendersInstance.destroy();
+                chartTopSendersInstance = new Chart(canvasS, {
+                    type: "bar",
+                    data: {
+                        labels: topLabels,
+                        datasets: [{
+                            label: "Pacchetti Trasmessi",
+                            data: topCounts,
+                            backgroundColor: "rgba(245, 158, 11, 0.6)",
+                            borderColor: "#f59e0b",
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: "y",
+                        scales: { x: { title: { display: true, text: "Pacchetti" } } }
+                    }
+                });
+            }
+        }
+
         // State
         let activeTab = "tabMessages";
         let activeChannelIdx = -1;
@@ -3126,7 +3960,24 @@ def get_web_client_html() -> str:
                 overlay.classList.add("active");
             });
 
+            if (window.scanTimerInterval) {
+                clearInterval(window.scanTimerInterval);
+                window.scanTimerInterval = null;
+            }
+
             if (isScanning) {
+                window.scanSecondsLeft = 25;
+                window.scanTimerInterval = setInterval(() => {
+                    window.scanSecondsLeft--;
+                    const span = document.getElementById("scanCountdownSec");
+                    if (span) {
+                        span.textContent = Math.max(0, window.scanSecondsLeft);
+                    }
+                    if (window.scanSecondsLeft <= 0 && window.scanTimerInterval) {
+                        clearInterval(window.scanTimerInterval);
+                        window.scanTimerInterval = null;
+                    }
+                }, 1000);
                 if (isDirectOnly) {
                     summary.textContent = "Scansione nodi diretti RF in corso...";
                     body.innerHTML = `
@@ -3145,6 +3996,9 @@ def get_web_client_html() -> str:
                             <div style="font-size: 0.78rem; margin-top: 4px; color: var(--text-muted);">
                                 In ascolto segnali a 0 salti RF senza intermediari o ripetitori...
                             </div>
+                            <div style="margin-top: 14px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 16px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 20px; font-weight: 700; color: #10b981; font-size: 0.9rem;">
+                                ⏱️ Finestra di ascolto: <span id="scanCountdownSec">25</span>s
+                            </div>
                         </div>
                     `;
                 } else {
@@ -3158,6 +4012,9 @@ def get_web_client_html() -> str:
                             </div>
                             <div style="margin-top: 16px; display: flex; justify-content: center;">
                                 <div class="pulse-dot" style="background: var(--primary); width: 14px; height: 14px; border-radius: 50%;"></div>
+                            </div>
+                            <div style="margin-top: 14px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 16px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.35); border-radius: 20px; font-weight: 700; color: #3b82f6; font-size: 0.9rem;">
+                                ⏱️ Finestra di ascolto: <span id="scanCountdownSec">25</span>s
                             </div>
                         </div>
                     `;
@@ -3284,6 +4141,10 @@ def get_web_client_html() -> str:
         }
 
         function closeScanResultsModal() {
+            if (window.scanTimerInterval) {
+                clearInterval(window.scanTimerInterval);
+                window.scanTimerInterval = null;
+            }
             const overlay = document.getElementById("scanModalOverlay");
             if (overlay) {
                 overlay.classList.remove("active");
@@ -3547,14 +4408,20 @@ def get_web_client_html() -> str:
                             hopInfo = hops === 0 ? " • 🎯 Diretto RF" : ` • 🔀 ${hops} ${hops === 1 ? 'salto' : 'salti'}`;
                         }
                         details += `<span class="ack-indicator confirmed" title="Ricevuto e confermato dalla mesh">✓✓ Ricevuto da ${nodeLabel}${hopInfo}${rtt}</span>`;
-                    } else if (status === "transmitted" || status === "air") {
-                        details += `<span class="ack-indicator air" title="Pacchetto trasmesso via radio nell'etere dalla scheda Heltec">✓✓ Trasmesso RF</span>`;
-                    } else if (status === "sent_to_radio") {
-                        details += `<span class="ack-indicator sent" title="Preso in carico dalla scheda radio Heltec">✓ Inviato alla radio</span>`;
-                    } else if (status === "pending" || status === "queued") {
-                        details += `<span class="ack-indicator pending" title="In coda di trasmissione">⏳ In attesa...</span>`;
                     } else {
-                        details += `<span class="ack-indicator sent">✓ Inviato</span>`;
+                        if (status === "transmitted" || status === "air") {
+                            details += `<span class="ack-indicator air" title="Pacchetto trasmesso via radio nell'etere dalla scheda Heltec">✓✓ Trasmesso RF</span>`;
+                        } else if (status && status.startsWith("retry_")) {
+                            const att = status.split("_")[1] || "1";
+                            details += `<span class="ack-indicator air" style="color:#f59e0b;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.35);" title="Nessun riscontro: re-inoltrato automaticamente ogni 45s">🔄 Reinvio ${att}/5</span>`;
+                        } else if (status === "sent_to_radio") {
+                            details += `<span class="ack-indicator sent" title="Preso in carico dalla scheda radio Heltec">✓ Inviato alla radio</span>`;
+                        } else if (status === "pending" || status === "queued") {
+                            details += `<span class="ack-indicator pending" title="In coda di trasmissione">⏳ In attesa...</span>`;
+                        } else {
+                            details += `<span class="ack-indicator sent">✓ Inviato</span>`;
+                        }
+                        details += ` <button class="btn-resend-msg" onclick="event.stopPropagation(); resendChatMessage(${m.id})" title="Nessun nodo ha confermato la ricezione. Clicca per reinviare via radio">🔄</button>`;
                     }
                 }
 
@@ -3564,6 +4431,44 @@ def get_web_client_html() -> str:
             });
 
             scrollChatToBottom();
+        }
+
+        function resendChatMessage(msgId) {
+            const m = messages.find(x => x.id === msgId);
+            if (!m) return;
+            let chIdx = m.channel_idx;
+            if (chIdx === undefined || chIdx === null) {
+                for (const [k, v] of Object.entries(channels)) {
+                    if (v.toLowerCase() === (m.channel || '').toLowerCase()) {
+                        chIdx = Number(k);
+                        break;
+                    }
+                }
+            }
+            if (chIdx === undefined || chIdx === null) chIdx = 0;
+            const text = m.content || "";
+            const sender = (m.sender && m.sender !== "Web-Operatore") ? m.sender : ((nodeInfo && nodeInfo.name) ? nodeInfo.name : "Buscate");
+            if (!text) return;
+
+            showToast(`🔄 Reinvio messaggio su [Canale ${chIdx}] via radio...`, true);
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({
+                    action: "send_message",
+                    channel_idx: chIdx,
+                    text: text,
+                    sender: sender
+                }));
+            } else {
+                fetch("/api/send", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ channel_idx: chIdx, text: text, sender: sender })
+                }).then(() => {
+                    showToast("🔄 Messaggio reinviato con successo!", true);
+                }).catch(() => {
+                    showToast("⚠️ Errore durante il reinvio", false);
+                });
+            }
         }
 
         function scrollChatToBottom() {
@@ -3648,7 +4553,11 @@ def get_web_client_html() -> str:
                     </div>
                     <div class="node-actions-col">
                         <span class="node-badge">${escapeHtml(n.last_channel || 'Radio')}</span>
-                        <button class="btn-icon" style="padding:3px 8px; font-size:0.7rem; color:var(--accent-blue);" onclick="openDirectMessage('${escapeJsString(n.node_name)}')">💬 DM</button>
+                        <div style="display:flex; gap:3px;">
+                            <button class="btn-icon" style="padding:3px 6px; font-size:0.75rem; color:#f59e0b;" onclick="event.stopPropagation(); toggleFavoriteNode('${escapeJsString(n.node_name)}')" title="Aggiungi / Rimuovi dai preferiti">${isFavorite(n.node_name) ? '⭐' : '☆'}</button>
+                            <button class="btn-icon" style="padding:3px 6px; font-size:0.7rem; color:#fbbf24;" onclick="openMailboxForNode('${escapeJsString(n.node_name)}')" title="Lascia messaggio differito">📬 Lascia</button>
+                            <button class="btn-icon" style="padding:3px 8px; font-size:0.7rem; color:var(--accent-blue);" onclick="openDirectMessage('${escapeJsString(n.node_name)}')">💬 DM</button>
+                        </div>
                         ${n.lat && n.lon ? `<a href="https://www.openstreetmap.org/?mlat=${n.lat}&mlon=${n.lon}#map=14/${n.lat}/${n.lon}" target="_blank" class="btn-icon" style="padding:3px 8px; font-size:0.7rem;">Mappa</a>` : ''}
                     </div>
                 `;
@@ -3881,6 +4790,22 @@ def get_web_client_html() -> str:
                 }
                 saveMessagesToStorage();
                 renderMessages();
+            } else if (data.type === "message_retry") {
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (data.msg_id && messages[i].id && messages[i].id === data.msg_id) {
+                        if (messages[i].ack_status !== "confirmed") {
+                            messages[i].ack_status = data.status || `retry_${data.retry_attempt || 1}`;
+                            saveMessagesToStorage();
+                            renderMessages();
+                            showToast(`🔄 Re-inoltro automatico (${data.retry_attempt}/${data.max_retries || 5}) su LoRa...`, true);
+                        }
+                        break;
+                    }
+                }
+            } else if (data.type === "mailbox_updated") {
+                loadMailbox();
+            } else if (data.type === "favorites_updated") {
+                loadFavorites();
             } else if (data.type === "message_ack") {
                 // Confirmed delivery ACK by remote node
                 let target = null;
@@ -3979,7 +4904,8 @@ def get_web_client_html() -> str:
             const text = input.value.trim();
             if (!text) return;
 
-            const sender = document.getElementById("senderNameInput").value.trim() || "Web-Operatore";
+            const senderInput = document.getElementById("senderNameInput");
+            const sender = (senderInput && senderInput.value.trim()) ? senderInput.value.trim() : ((nodeInfo && nodeInfo.name) ? nodeInfo.name : "Buscate");
             const btn = document.getElementById("sendBtn");
             btn.disabled = true;
 
@@ -4282,7 +5208,7 @@ def get_web_client_html() -> str:
                             triggerDirectSuccess(heardNodes);
                         });
                 }
-            }, 2500);
+            }, 25000);
         }
 
         const scanDirectNodesBtn = document.getElementById("scanDirectNodesBtn");
@@ -4330,7 +5256,7 @@ def get_web_client_html() -> str:
                             triggerScanSuccess(heardNodes);
                         });
                 }
-            }, 2500);
+            }, 25000);
         });
 
         // Scan Modal Close Listeners
@@ -4448,6 +5374,8 @@ def get_web_client_html() -> str:
         connectWebSocket();
         fetchHourlyTraffic();
         fetchAutoResponderStatus();
+        loadFavorites();
+        loadMailbox();
     </script>
 </body>
 </html>"""

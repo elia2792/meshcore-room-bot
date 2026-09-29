@@ -1,6 +1,15 @@
 __pycache__/
 *.py[cod]
-*$py.class
-room_messages.db
+*.class
+*.db
+*.sqlite*
+*.bak*
+*.log
 .env
+.env.*
+!.env.example
 .DS_Store
+venv/
+patch_*.py
+update_*.py
+sanitize_*.py
