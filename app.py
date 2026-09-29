@@ -962,10 +962,17 @@ def check_and_process_mention_reply(sender_node: str, channel_name: str, content
                 matched_row = row
                 break
 
-        # Se non c'e' menzione esplicita ma qualcuno risponde sullo stesso canale dopo il nostro messaggio non ancora confermato:
+        # Se non c'e' menzione esplicita ma altri nodi/ripetitori confermano o parlano sullo stesso canale:
         if not matched_row and recent_rows:
             top_row = recent_rows[0]
-            if top_row["ack_status"] in ("sent_to_radio", "transmitted", "pending"):
+            raw_n = top_row["ack_nodes"] or ""
+            current_nodes = []
+            try:
+                current_nodes = json.loads(raw_n) if raw_n else []
+            except Exception:
+                current_nodes = [raw_n] if raw_n else []
+            # Abbina se e' in attesa OPPURE se e' gia' confermato ma un altro nodo si aggiunge (non solo il destinatario, anche altri)
+            if top_row["ack_status"] in ("sent_to_radio", "transmitted", "pending") or (top_row["ack_status"] == "confirmed" and sender_node not in current_nodes):
                 matched_row = top_row
 
         if not matched_row:
@@ -1183,7 +1190,11 @@ def check_and_cancel_retries_for_incoming(sender_name: str, channel_name: str, c
 
     if ch_low and ch_low in active_retry_channel_map:
         for mid in list(active_retry_channel_map[ch_low]):
-            trigger_retry_cancellation(mid, f"canale {channel_name} attivo")
+            trigger_retry_cancellation(mid, f"canale {channel_name} attivo da {sender_name}")
+
+    # Se qualsiasi altro nodo o ripetitore trasmette via radio, ferma i reinvii attivi per evitare collisioni RF
+    for mid in list(active_retry_events.keys()):
+        trigger_retry_cancellation(mid, f"traffico radio da {sender_name}")
 
 async def auto_retry_message(msg_id: int, channel_idx: int, lora_text: str, max_retries: int = 5, interval: int = 45, target_node: Optional[str] = None):
     """
@@ -3230,7 +3241,9 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                             prev_count = last_m[1] or 0
                             new_nodes_count = prev_count + 1
                             update_message_ack(target_msg_id, "confirmed", round_trip_ms, hops, ack_nodes_count=new_nodes_count)
-                            trigger_retry_cancellation(target_msg_id, "hardware ACK 0x82")
+                            # Ferma all'istante sia il messaggio che qualsiasi altro reinvio attivo (conferma mesh da destinatario o nodi/ripetitori)
+                            for mid in list(active_retry_events.keys()):
+                                trigger_retry_cancellation(mid, "hardware ACK 0x82 da nodo/ripetitore mesh")
                         conn.close()
                     except Exception as e:
                         print("Error updating ACK:", e)
