@@ -1125,65 +1125,105 @@ async def send_to_heltec(raw_bytes: bytes) -> bool:
             active_heltec_ws = None
     return False
 
+# ── Instant Retry Cancellation Registry ────────────────────────────────────────
+active_retry_events: Dict[int, asyncio.Event] = {}
+active_retry_channel_map: Dict[str, set] = {}
+active_retry_target_map: Dict[str, set] = {}
+
+def register_retry_task(msg_id: int, channel_name: str, target_node: Optional[str] = None) -> asyncio.Event:
+    event = asyncio.Event()
+    active_retry_events[msg_id] = event
+    ch_clean = channel_name.strip().lower() if channel_name else ""
+    if ch_clean:
+        if ch_clean not in active_retry_channel_map:
+            active_retry_channel_map[ch_clean] = set()
+        active_retry_channel_map[ch_clean].add(msg_id)
+    if target_node:
+        t_clean = target_node.strip().lower()
+        if t_clean not in active_retry_target_map:
+            active_retry_target_map[t_clean] = set()
+        active_retry_target_map[t_clean].add(msg_id)
+    return event
+
+def unregister_retry_task(msg_id: int):
+    active_retry_events.pop(msg_id, None)
+    for ch, ids in list(active_retry_channel_map.items()):
+        ids.discard(msg_id)
+    for tgt, ids in list(active_retry_target_map.items()):
+        ids.discard(msg_id)
+
+def trigger_retry_cancellation(msg_id: int, reason: str = ""):
+    """Interrompe ALL'ISTANTE (0 ms) il task di reinvio per msg_id."""
+    event = active_retry_events.get(msg_id)
+    if event and not event.is_set():
+        event.set()
+        print(f"[AutoRetry] ⚡ Reinvio msg #{msg_id} fermato SUBITO ({reason})!")
+
+def check_and_cancel_retries_for_incoming(sender_name: str, channel_name: str, content_text: str):
+    """
+    Quando un nodo trasmette via radio:
+    1. Se il mittente e' il destinatario a cui avevamo scritto -> STOP SUBITO!
+    2. Se e' sullo stesso canale -> STOP SUBITO!
+    3. Se menziona la nostra stazione o Telegram -> STOP SUBITO!
+    """
+    s_low = sender_name.strip().lower() if sender_name else ""
+    ch_low = channel_name.strip().lower() if channel_name else ""
+    low_text = content_text.lower() if content_text else ""
+    my_name = node_info.get("name", "Buscate").strip().lower()
+
+    if s_low:
+        for tgt, ids in list(active_retry_target_map.items()):
+            if s_low == tgt or tgt in s_low or s_low in tgt:
+                for mid in list(ids):
+                    trigger_retry_cancellation(mid, f"destinatario {sender_name} attivo")
+
+    if my_name in low_text or "elia" in low_text or "web-operatore" in low_text or "ack" in low_text:
+        for mid in list(active_retry_events.keys()):
+            trigger_retry_cancellation(mid, f"menzione da {sender_name}")
+
+    if ch_low and ch_low in active_retry_channel_map:
+        for mid in list(active_retry_channel_map[ch_low]):
+            trigger_retry_cancellation(mid, f"canale {channel_name} attivo")
+
 async def auto_retry_message(msg_id: int, channel_idx: int, lora_text: str, max_retries: int = 5, interval: int = 45, target_node: Optional[str] = None):
     """
     Ogni 45 secondi reinvia il messaggio via LoRa se non e' stato recapitato (fino a 5 tentativi).
-    Si interrompe subito se:
-      1. Viene ricevuto un ACK di rete mesh (ack_status == 'confirmed' o ack_nodes_count > 0).
-      2. Qualcuno risponde via radio LoRa sul canale, o risponde specificamente il target_node.
+    Si interrompe ALL'ISTANTE se qualcuno riceve prima del reinvio successivo.
     """
-    for attempt in range(1, max_retries + 1):
-        await asyncio.sleep(interval)
-        try:
+    if not target_node:
+        t_match = re.search(r'@\[([^\]]+)\]', lora_text)
+        if not t_match:
+            t_match = re.search(r'@(\S+)', lora_text)
+        if t_match:
+            target_node = t_match.group(1).strip()
+
+    ch_name = discovered_channels.get(channel_idx, f"Canale {channel_idx}")
+    cancel_event = register_retry_task(msg_id, ch_name, target_node)
+
+    try:
+        for attempt in range(1, max_retries + 1):
+            # Attesa non bloccante: se qualcuno riceve/risponde si sveglia all'istante (0 ms)
+            try:
+                await asyncio.wait_for(cancel_event.wait(), timeout=interval)
+                print(f"[AutoRetry] 🛑 Reinvio msg #{msg_id} fermato all'istante: riscontro ricevuto prima del tentativo {attempt}/{max_retries}!")
+                return
+            except asyncio.TimeoutError:
+                pass
+
+            # Controllo rapido database prima di trasmettere
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
-            cur.execute("SELECT ack_status, ack_nodes_count, channel, content, sender FROM messages WHERE id = ?", (msg_id,))
+            cur.execute("SELECT ack_status, ack_nodes_count FROM messages WHERE id = ?", (msg_id,))
             row = cur.fetchone()
-
-            if not row:
-                conn.close()
-                break
-
-            ch_name = row["channel"] or f"Canale {channel_idx}"
-
-            # 1. Controllo ACK di rete MeshCore
-            if row["ack_status"] in ("confirmed", "replied") or (row["ack_nodes_count"] and row["ack_nodes_count"] > 0):
-                print(f"[AutoRetry] Messaggio #{msg_id} confermato con ACK ({row['ack_nodes_count']} nodi). Nessun reinoltro necessario.")
-                conn.close()
-                break
-
-            # 2. Controllo se qualcuno ha risposto via radio LoRa dopo questo messaggio
-            if target_node:
-                cur.execute(
-                    "SELECT id, sender, content FROM messages WHERE id > ? AND (channel = ? OR sender = ? OR sender LIKE ?) AND source = 'LoRa Mesh' ORDER BY id ASC LIMIT 1",
-                    (msg_id, ch_name, target_node, f"%{target_node}%")
-                )
-            else:
-                cur.execute(
-                    "SELECT id, sender, content FROM messages WHERE id > ? AND channel = ? AND source = 'LoRa Mesh' ORDER BY id ASC LIMIT 1",
-                    (msg_id, ch_name)
-                )
-            reply_msg = cur.fetchone()
-            if reply_msg:
-                replier = reply_msg["sender"]
-                print(f"[AutoRetry] Risposta radio ricevuta da {replier} su [{ch_name}] per msg #{msg_id}. Interrompo subito i tentativi!")
-                cur.execute("UPDATE messages SET ack_status = 'confirmed', ack_nodes_count = COALESCE(ack_nodes_count, 1) WHERE id = ?", (msg_id,))
-                conn.commit()
-                conn.close()
-                await broadcast_to_browsers({
-                    "type": "message_ack",
-                    "msg_id": msg_id,
-                    "status": "confirmed",
-                    "node_name": replier,
-                    "ack_nodes_count": 1
-                })
-                break
-
             conn.close()
 
+            if not row or row["ack_status"] in ("confirmed", "replied") or (row["ack_nodes_count"] and row["ack_nodes_count"] > 0):
+                print(f"[AutoRetry] Messaggio #{msg_id} confermato nel database. Fine tentativi.")
+                return
+
             if not active_heltec_ws:
-                print(f"[AutoRetry] Heltec non connesso, salto reinoltro #{msg_id}.")
+                print(f"[AutoRetry] Heltec non connesso, salto tentativo {attempt}/{max_retries}.")
                 continue
 
             frame = build_channel_send_frame(channel_idx, lora_text)
@@ -1192,7 +1232,7 @@ async def auto_retry_message(msg_id: int, channel_idx: int, lora_text: str, max_
             if sent:
                 retry_status = f"retry_{attempt}"
                 update_message_ack(msg_id, retry_status)
-                print(f"[AutoRetry] Re-inoltrato messaggio #{msg_id} su [{ch_name}] via LoRa (tentativo {attempt}/{max_retries} a {attempt*interval}s)")
+                print(f"[AutoRetry] 🔄 Re-inoltrato messaggio #{msg_id} su [{ch_name}] via LoRa (tentativo {attempt}/{max_retries} a {attempt * interval}s)")
 
                 await broadcast_to_browsers({
                     "type": "message_retry",
@@ -1202,14 +1242,15 @@ async def auto_retry_message(msg_id: int, channel_idx: int, lora_text: str, max_
                     "status": retry_status
                 })
 
-                content_preview = row["content"][:60] + "..." if len(row["content"]) > 60 else row["content"]
+                content_preview = lora_text[:60] + "..." if len(lora_text) > 60 else lora_text
                 await broadcast_telegram(
                     f"🔄 <i>Nessun riscontro dopo {attempt * interval}s: re-inoltrato via radio su [{ch_name}] (tentativo {attempt}/{max_retries}):</i>\n\"{content_preview}\"",
                     lora_channel_idx=channel_idx
                 )
-        except Exception as e:
-            print(f"[AutoRetry] Errore #{msg_id}: {e}")
-            break
+    except Exception as e:
+        print(f"[AutoRetry] Errore #{msg_id}: {e}")
+    finally:
+        unregister_retry_task(msg_id)
 
 
 # ── Servizio Meteo Open-Meteo ────────────────────────────────────────────────
@@ -2029,8 +2070,7 @@ async def websocket_client_endpoint(websocket: WebSocket):
                     frame = build_channel_send_frame(ch_idx, lora_text)
                     sent = await send_to_heltec(frame)
                     if sent:
-                        if AUTO_RETRY_ENABLED:
-                            asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=3, interval=60))
+                        asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=5, interval=45, target_node=reply_to_sender))
 
                     if reply_to_sender:
                         tg_msg = f"🌐 <b>[Web Client ➔ Canale {ch_idx}: {ch_name}]</b>\n↩️ <i>Risposta a @{reply_to_sender}</i>\n{text}"
@@ -2460,8 +2500,7 @@ async def api_send(request: Request):
     frame = build_channel_send_frame(ch_idx, lora_text)
     sent = await send_to_heltec(frame)
     if sent:
-        if AUTO_RETRY_ENABLED:
-            asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=3, interval=60))
+        asyncio.create_task(auto_retry_message(msg_id, ch_idx, lora_text, max_retries=5, interval=45))
 
     tg_msg = f"🌐 <b>[Web API ➔ Canale {ch_idx}: {ch_name}]</b>\n{text}"
     await broadcast_telegram(tg_msg, lora_channel_idx=ch_idx)
@@ -2922,6 +2961,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     save_message("LoRa Mesh", sender_name, ch_name, content_text, snr=snr, hops=hops)
 
                     # Check if incoming message mentions or replies to our station/previous message
+                    check_and_cancel_retries_for_incoming(sender_name, ch_name, content_text)
                     reply_ack = check_and_process_mention_reply(sender_name, ch_name, content_text, snr, hops)
                     if reply_ack:
                         await broadcast_to_browsers({
@@ -3013,6 +3053,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                     save_message("LoRa Mesh", sender_name, ch_name, content_text, hops=hops)
 
                     # Check if incoming message mentions or replies to our station/previous message
+                    check_and_cancel_retries_for_incoming(sender_name, ch_name, content_text)
                     reply_ack = check_and_process_mention_reply(sender_name, ch_name, content_text, None, hops)
                     if reply_ack:
                         await broadcast_to_browsers({
@@ -3189,6 +3230,7 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
                             prev_count = last_m[1] or 0
                             new_nodes_count = prev_count + 1
                             update_message_ack(target_msg_id, "confirmed", round_trip_ms, hops, ack_nodes_count=new_nodes_count)
+                            trigger_retry_cancellation(target_msg_id, "hardware ACK 0x82")
                         conn.close()
                     except Exception as e:
                         print("Error updating ACK:", e)
@@ -3985,8 +4027,7 @@ async def telegram_polling_loop():
                                 frame = build_channel_send_frame(resolved, f"[{sender_name}]: {content}")
                                 sent = await send_to_heltec(frame)
                                 if sent:
-                                    if AUTO_RETRY_ENABLED:
-                                        asyncio.create_task(auto_retry_message(msg_id, resolved, f"[{sender_name}]: {content}", max_retries=3, interval=60))
+                                    asyncio.create_task(auto_retry_message(msg_id, resolved, f"[{sender_name}]: {content}", max_retries=5, interval=45))
                                 await broadcast_to_browsers({
                                     "type": "new_message",
                                     "id": msg_id,
@@ -4181,8 +4222,7 @@ async def telegram_polling_loop():
                         frame = build_channel_send_frame(target_ch_idx, f"[{sender_name}]: {payload_text}")
                         sent = await send_to_heltec(frame)
                         if sent:
-                            if AUTO_RETRY_ENABLED:
-                                asyncio.create_task(auto_retry_message(msg_id, target_ch_idx, f"[{sender_name}]: {payload_text}", max_retries=3, interval=60))
+                            asyncio.create_task(auto_retry_message(msg_id, target_ch_idx, f"[{sender_name}]: {payload_text}", max_retries=5, interval=45))
                         await broadcast_to_browsers({
                             "type": "new_message",
                             "id": msg_id,
