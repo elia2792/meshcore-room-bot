@@ -2,6 +2,7 @@ import json
 import asyncio
 import os
 import sys
+import socket
 import re
 import struct
 import sqlite3
@@ -1713,6 +1714,24 @@ async def generate_report_text() -> str:
         f"{nodes_summary}"
     )
 
+
+async def heltec_keepalive_and_sync_loop():
+    """
+    Heartbeat attivo e sync periodico con Heltec V3:
+    1. Invia ogni 15 secondi CMD_SYNC_NEXT_MESSAGE (10).
+    2. Evita che il WiFi dell'ESP32 o il NAT del router vadano in sonno/idle timeout.
+    3. Scarica all'istante eventuali messaggi LoRa accumulati nella scheda, evitando blocchi.
+    4. Rileva subito disconnessioni TCP silenti e attiva il ripristino automatico del bridge.
+    """
+    await asyncio.sleep(5)
+    while True:
+        try:
+            await asyncio.sleep(15)
+            if active_heltec_ws:
+                await send_to_heltec(build_sync_next_msg_frame())
+        except Exception as e:
+            print(f"[HeltecSync] Errore heartbeat/sync: {e}")
+
 async def periodic_heartbeat_loop():
     # Wait 60s before initial check, then send report every 24 hours
     await asyncio.sleep(60)
@@ -1847,6 +1866,20 @@ async def heltec_bridge_loop():
             elif HELTEC_TCP_HOST:
                 print(f"[Bridge] Connecting to Heltec TCP at {HELTEC_TCP_HOST}:{HELTEC_TCP_PORT}...")
                 reader, writer = await asyncio.open_connection(HELTEC_TCP_HOST, HELTEC_TCP_PORT)
+                sock = writer.get_extra_info("socket")
+                if sock:
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if hasattr(socket, "TCP_KEEPIDLE"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 10)
+                        if hasattr(socket, "TCP_KEEPINTVL"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)
+                        if hasattr(socket, "TCP_KEEPCNT"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                        if hasattr(socket, "TCP_NODELAY"):
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    except Exception as sock_err:
+                        print(f"[Bridge] Warning setting socket options: {sock_err}")
             else:
                 await asyncio.sleep(5)
                 continue
@@ -1894,6 +1927,11 @@ async def heltec_bridge_loop():
                 )
                 for t in pending:
                     t.cancel()
+                for t in done:
+                    try:
+                        t.result()
+                    except Exception as t_err:
+                        pass
         except ConnectionResetError:
             print("[Bridge] Connessione resettata dall'Heltec. Attendo 5s...")
             await asyncio.sleep(5)
@@ -1904,6 +1942,12 @@ async def heltec_bridge_loop():
             heltec_connected_evt.clear()
             async with heltec_write_lock:
                 heltec_raw_writer = None
+            try:
+                if 'writer' in locals() and writer:
+                    writer.close()
+                    await writer.wait_closed()
+            except Exception:
+                pass
 
 @app.on_event("startup")
 async def startup_event():
@@ -1933,6 +1977,7 @@ async def startup_event():
     asyncio.create_task(keep_alive_loop())
     asyncio.create_task(start_companion_server())
     asyncio.create_task(heltec_bridge_loop())
+    asyncio.create_task(heltec_keepalive_and_sync_loop())
     try:
         from room_server import room_server_bridge
         room_server_bridge.start()
@@ -2940,13 +2985,8 @@ async def websocket_mesh_endpoint(websocket: WebSocket):
 
                 # PUSH_CODE_MSG_WAITING = 0x83 (131)
                 elif code == 0x83:
-                    if len(connected_companion_clients) == 0:
-                        await send_to_heltec(build_sync_next_msg_frame())
-                    else:
-                        async def delayed_sync_fallback():
-                            await asyncio.sleep(2.5)
-                            await send_to_heltec(build_sync_next_msg_frame())
-                        asyncio.create_task(delayed_sync_fallback())
+                    # Sincronizza immediatamente senza attese per scaricare subito il messaggio
+                    await send_to_heltec(build_sync_next_msg_frame())
 
                 # RESP_CODE_CHANNEL_MSG_RECV_V3 = 17 (0x11)
                 elif code == 17 and len(payload) >= 11:
